@@ -590,6 +590,7 @@ async function batchPreloadStudy({ studyUid, series, patient, studyDescription, 
           fd.append('image',             blob, `image_${i}.jpg`);
           fd.append('patient_name',      patient.name);
           fd.append('patient_dob',       patient.dob);
+          fd.append('provider',          patient.provider || '');
           fd.append('study_uid',         studyUid);
           fd.append('dicom_study_uid',   studyUid);
           fd.append('study_description', desc.trim());

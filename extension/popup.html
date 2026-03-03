@@ -185,6 +185,12 @@ Doe, Jane  03/22/1980"></textarea>
       <div class="ocr-preview" id="ocrPreview" style="display:none">
         <img id="ocrImg" alt="pasted screenshot">
         <div class="ocr-status" id="ocrStatus"></div>
+        <div id="ocrProviderFilterRow" style="display:none; margin-bottom:4px;">
+          <div style="position:relative">
+            <button class="provider-dropdown-btn" id="ocrProviderDropdownBtn">All providers ▾</button>
+            <div class="provider-dropdown" id="ocrProviderDropdown" style="display:none"></div>
+          </div>
+        </div>
         <textarea id="ocrResult" class="ocr-result" placeholder="Extracted patients (edit as needed)…" spellcheck="false"></textarea>
         <details id="ocrRawDetails" style="margin-top:2px">
           <summary style="font-size:10px;color:#475569;cursor:pointer">Raw OCR text</summary>

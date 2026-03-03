@@ -41,6 +41,9 @@
     .patient-name { font-size: 15px; font-weight: 500; color: #f1f5f9; }
     .patient-meta { font-size: 11px; color: #64748b; margin-top: 2px; }
     .patient-badge { display: inline-block; background: #1e293b; color: #94a3b8; padding: 2px 8px; border-radius: 10px; font-size: 11px; margin-top: 4px; }
+    .patient-provider { font-size: 10px; color: #475569; margin-top: 1px; }
+    .provider-filter-btn { padding: 3px 8px; border-radius: 10px; font-size: 10px; cursor: pointer; border: 1px solid #334155; background: #1e293b; color: #64748b; white-space: nowrap; }
+    .provider-filter-btn.active { background: #0ea5e9; color: white; border-color: #0ea5e9; }
     .empty-state { padding: 40px 20px; text-align: center; color: #475569; }
     .empty-state p { margin-top: 8px; font-size: 13px; }
 
@@ -456,6 +459,7 @@
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
       </button>
     </div>
+    <div id="providerFilterBar" style="display:none; padding:6px 10px; border-bottom:1px solid #1e293b; flex-wrap:wrap; gap:4px;"></div>
     <div class="patient-list" id="patientList">
       <div class="empty-state" id="emptyState">
         <p>No preloaded images yet.<br>Use the Chrome extension to preload.</p>
@@ -588,9 +592,9 @@
   const _castPatient = _urlParams.get('patient');
   const _displayMode = _urlParams.has('displaymode');
   if (_displayMode) {
-    // Hide sidebar and cast controls — this is a read-only room display
+    // Read-only room display — hide all controls
     document.getElementById('sidebar').classList.add('collapsed');
-    document.getElementById('castBar') && (document.getElementById('castBar').style.display = 'none');
+    document.getElementById('viewerHeader').style.display = 'none';
   }
 
   // State
@@ -611,6 +615,10 @@
 
   // Date group collapse state (persists across renderPatientList re-renders)
   const collapsedDates = new Set();
+
+  // Provider filter state (null = show all, Set = only show these providers)
+  let allLoadedPatients = [];
+  const selectedViewerProviders = new Set();
 
   // Patient summary list indexed by clinic date key — used by the report
   let patientsByDate = {};
@@ -689,8 +697,42 @@
           }
         }
       }
-      renderPatientList(data.patients);
+      allLoadedPatients = data.patients;
+      updateProviderFilterBar(data.patients);
+      const visible = selectedViewerProviders.size
+        ? data.patients.filter(p => !p.provider || selectedViewerProviders.has(p.provider))
+        : data.patients;
+      renderPatientList(visible);
     } catch (e) { console.error('loadPatients:', e); }
+  }
+
+  function updateProviderFilterBar(patients) {
+    const providers = [...new Set(patients.map(p => p.provider).filter(Boolean))].sort();
+    const bar = document.getElementById('providerFilterBar');
+    if (providers.length < 2) { bar.style.display = 'none'; return; }
+
+    // Initialise selection to all providers on first load
+    if (selectedViewerProviders.size === 0) providers.forEach(p => selectedViewerProviders.add(p));
+
+    bar.style.display = 'flex';
+    bar.innerHTML = providers.map(p =>
+      `<button class="provider-filter-btn${selectedViewerProviders.has(p) ? ' active' : ''}"
+        data-provider="${escAttr(p)}" onclick="toggleViewerProvider('${escAttr(p)}')">${escHtml(p)}</button>`
+    ).join('');
+  }
+
+  function toggleViewerProvider(name) {
+    if (selectedViewerProviders.has(name)) {
+      if (selectedViewerProviders.size === 1) return; // keep at least one
+      selectedViewerProviders.delete(name);
+    } else {
+      selectedViewerProviders.add(name);
+    }
+    document.querySelectorAll('.provider-filter-btn').forEach(btn => {
+      btn.classList.toggle('active', selectedViewerProviders.has(btn.dataset.provider));
+    });
+    const visible = allLoadedPatients.filter(p => !p.provider || selectedViewerProviders.has(p.provider));
+    renderPatientList(visible);
   }
 
   function renderPatientList(patients) {
@@ -741,6 +783,7 @@
             <div class="patient-item-content">
               <div class="patient-name">${escHtml(p.name)}</div>
               <div class="patient-meta">DOB: ${escHtml(p.dob)}${pendingAge ? ` · <span class="refresh-pending-age">↻ ${escHtml(pendingAge)}</span>` : ''}</div>
+              ${p.provider ? `<div class="patient-provider">${escHtml(p.provider)}</div>` : ''}
               <span class="patient-badge">${p.image_count} image${p.image_count !== 1 ? 's' : ''} · ${p.study_count} study</span>
             </div>
             <button class="patient-refresh-btn" title="Request refresh" onclick="event.stopPropagation(); requestPatientRefresh('${escAttr(p.key)}')">${refreshSvg}</button>

@@ -10,6 +10,10 @@ let parsedPdfPatients = [];
 let pdfProviders = [];
 const selectedProviders = new Set();
 
+let ocrParsedPatients = [];
+let ocrProviders = [];
+const ocrSelectedProviders = new Set();
+
 const FILTER_KEYS = ['filterSpine', 'filterXR', 'filterCT', 'filterMR'];
 const STORAGE_KEYS = ['schedule', 'serverUrl', 'clinicDate', ...FILTER_KEYS];
 
@@ -92,8 +96,16 @@ function parseSchedule(text) {
   const lines = text.trim().split('\n').filter(l => l.trim());
 
   for (const line of lines) {
-    const trimmed = line.trim();
+    let trimmed = line.trim();
     if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('//')) continue;
+
+    // Extract provider annotation: "Name  DOB  # Provider Name"
+    let provider = '';
+    const provMatch = trimmed.match(/\s{2,}#\s+(.+)$/);
+    if (provMatch) {
+      provider = provMatch[1].trim();
+      trimmed = trimmed.slice(0, provMatch.index).trim();
+    }
 
     const dobMatch = trimmed.match(/(\d{1,2}\/\d{1,2}\/\d{4})\s*$/);
     if (!dobMatch) {
@@ -105,7 +117,7 @@ function parseSchedule(text) {
     const name = trimmed.slice(0, dobMatch.index).trim().replace(/[,\t]+$/, '').trim();
     if (!name) { log(`⚠ Skipping (no name): ${trimmed}`, 'error'); continue; }
 
-    patients.push({ name, dob });
+    patients.push({ name, dob, provider });
   }
 
   return patients;
@@ -221,6 +233,23 @@ function initOcr() {
 
   document.getElementById('ocrApplyBtn').addEventListener('click', applyOcrResult);
   document.getElementById('ocrClearBtn').addEventListener('click', clearOcr);
+  document.getElementById('ocrProviderDropdownBtn').addEventListener('click', toggleOcrProviderDropdown);
+
+  // Event delegation for OCR provider dropdown (CSP-safe)
+  const dd = document.getElementById('ocrProviderDropdown');
+  dd.addEventListener('click', e => {
+    const a = e.target.closest('[data-ocr-select-all]');
+    if (a) setAllOcrProviders(a.dataset.ocrSelectAll === 'true');
+  });
+  dd.addEventListener('change', e => {
+    const cb = e.target.closest('input[type=checkbox]');
+    if (cb) toggleOcrProvider(cb.value, cb.checked);
+  });
+
+  document.addEventListener('click', e => {
+    if (!e.target.closest('#ocrProviderFilterRow'))
+      document.getElementById('ocrProviderDropdown').style.display = 'none';
+  });
 
   document.addEventListener('paste', handleOcrPaste);
 }
@@ -257,13 +286,36 @@ async function runOcr(blob) {
       return;
     }
     const data = await resp.json();
-    const parsed = parseOcrToSchedule(data.text || '');
-    document.getElementById('ocrResult').value = parsed;
     document.getElementById('ocrRaw').value = data.text || '';
-    const found = parsed.split('\n').filter(Boolean).length;
-    statusEl.textContent = parsed
-      ? `Found ${found} patient(s) (${data.dates_found ?? '?'} dates detected) — edit if needed, then Apply`
-      : 'No patients detected — expand "Raw OCR text" below to diagnose';
+
+    if (data.patients && data.patients.length > 0) {
+      ocrParsedPatients = data.patients;
+      ocrProviders = data.providers || [];
+      ocrSelectedProviders.clear();
+      ocrProviders.forEach(p => ocrSelectedProviders.add(p));
+
+      if (ocrProviders.length > 1) {
+        buildOcrProviderDropdown();
+        document.getElementById('ocrProviderFilterRow').style.display = '';
+      } else {
+        document.getElementById('ocrProviderFilterRow').style.display = 'none';
+      }
+
+      updateOcrTextarea();
+      const found = ocrParsedPatients.length;
+      const provStr = ocrProviders.length > 1 ? ` · ${ocrProviders.length} providers` : '';
+      statusEl.textContent = `Found ${found} patient(s)${provStr} — edit if needed, then Apply`;
+    } else {
+      // Fallback: client-side parse (no structured patients from server)
+      ocrParsedPatients = []; ocrProviders = []; ocrSelectedProviders.clear();
+      document.getElementById('ocrProviderFilterRow').style.display = 'none';
+      const parsed = parseOcrToSchedule(data.text || '');
+      document.getElementById('ocrResult').value = parsed;
+      const found = parsed.split('\n').filter(Boolean).length;
+      statusEl.textContent = parsed
+        ? `Found ${found} patient(s) (${data.dates_found ?? '?'} dates detected) — edit if needed, then Apply`
+        : 'No patients detected — expand "Raw OCR text" below to diagnose';
+    }
   } catch (e) {
     statusEl.textContent = `Server error: ${e.message}`;
   }
@@ -306,12 +358,62 @@ function applyOcrResult() {
 }
 
 function clearOcr() {
+  ocrParsedPatients = []; ocrProviders = []; ocrSelectedProviders.clear();
   document.getElementById('ocrPreview').style.display = 'none';
   document.getElementById('ocrDrop').style.display = 'block';
   document.getElementById('ocrResult').value = '';
   document.getElementById('ocrRaw').value = '';
   document.getElementById('ocrStatus').textContent = '';
   document.getElementById('ocrImg').src = '';
+  document.getElementById('ocrProviderFilterRow').style.display = 'none';
+}
+
+
+function buildOcrProviderDropdown() {
+  const dd = document.getElementById('ocrProviderDropdown');
+  dd.innerHTML = `<div class="provider-select-all">
+    <a data-ocr-select-all="true">All</a> · <a data-ocr-select-all="false">None</a>
+  </div>` + ocrProviders.map(p =>
+    `<label class="provider-option">
+      <input type="checkbox" value="${escHtml(p)}" ${ocrSelectedProviders.has(p) ? 'checked' : ''}>
+      ${escHtml(p)}
+    </label>`
+  ).join('');
+  updateOcrProviderBtn();
+}
+
+function toggleOcrProviderDropdown() {
+  const dd = document.getElementById('ocrProviderDropdown');
+  dd.style.display = dd.style.display === 'none' ? '' : 'none';
+}
+
+function toggleOcrProvider(name, checked) {
+  if (checked) ocrSelectedProviders.add(name); else ocrSelectedProviders.delete(name);
+  updateOcrProviderBtn();
+  updateOcrTextarea();
+}
+
+function setAllOcrProviders(checked) {
+  ocrProviders.forEach(p => checked ? ocrSelectedProviders.add(p) : ocrSelectedProviders.delete(p));
+  document.querySelectorAll('#ocrProviderDropdown input[type=checkbox]')
+    .forEach(cb => { cb.checked = checked; });
+  updateOcrProviderBtn();
+  updateOcrTextarea();
+}
+
+function updateOcrProviderBtn() {
+  const n = ocrSelectedProviders.size, total = ocrProviders.length;
+  document.getElementById('ocrProviderDropdownBtn').textContent =
+    n === total ? `All providers (${total}) ▾` :
+    n === 0    ? 'No providers selected ▾' :
+                 `${n} of ${total} providers ▾`;
+}
+
+function updateOcrTextarea() {
+  const filtered = ocrParsedPatients
+    .filter(p => !p.provider || ocrSelectedProviders.has(p.provider))
+    .map(p => p.provider ? `${p.name}  ${p.dob}  # ${p.provider}` : `${p.name}  ${p.dob}`);
+  document.getElementById('ocrResult').value = filtered.join('\n');
 }
 
 
@@ -426,7 +528,7 @@ function updateProviderBtn() {
 function applyPdfResult() {
   const filtered = parsedPdfPatients
     .filter(p => !p.provider || selectedProviders.has(p.provider))
-    .map(p => `${p.name}  ${p.dob}`);
+    .map(p => p.provider ? `${p.name}  ${p.dob}  # ${p.provider}` : `${p.name}  ${p.dob}`);
   if (!filtered.length) return;
   const current = $('#schedule').value.trim();
   $('#schedule').value = current ? `${current}\n${filtered.join('\n')}` : filtered.join('\n');

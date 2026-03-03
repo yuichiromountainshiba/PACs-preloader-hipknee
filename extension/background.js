@@ -95,7 +95,7 @@ async function preloadPatient(pt, serverUrl, clinicDate, filters) {
     const sent = await sendToContentScript('batchPreloadStudy', {
       studyUid:         study.studyUid,
       series:           study.series,
-      patient:          { name: pt.name, dob: pt.dob },
+      patient:          { name: pt.name, dob: pt.dob, provider: pt.provider || '' },
       studyDescription: study.description || '',
       studyDate:        study.studyDate || '',
       serverUrl,
@@ -116,6 +116,7 @@ async function registerPatientPlaceholder(pt, serverUrl, clinicDate) {
     form.append('patient_name', pt.name);
     form.append('patient_dob', pt.dob);
     form.append('clinic_date', clinicDate);
+    form.append('provider', pt.provider || '');
     await fetch(`${serverUrl}/api/patients/register`, { method: 'POST', body: form });
   } catch (e) { /* non-critical */ }
 }

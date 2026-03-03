@@ -13,8 +13,35 @@ import os
 import json
 import re
 import uuid
+import subprocess
 from pathlib import Path
 from datetime import datetime
+
+
+def _find_tesseract() -> str:
+    """Return the path to tesseract.exe, checking PATH and common install locations."""
+    # 1. Already on PATH?
+    try:
+        result = subprocess.run(['where', 'tesseract'], capture_output=True, text=True)
+        if result.returncode == 0:
+            return result.stdout.strip().splitlines()[0]
+    except Exception:
+        pass
+    # 2. Common Windows install locations
+    candidates = [
+        r'C:\Program Files\Tesseract-OCR\tesseract.exe',
+        r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe',
+        os.path.expandvars(r'%USERPROFILE%\Tesseract-OCR\tesseract.exe'),
+        os.path.expandvars(r'%LOCALAPPDATA%\Programs\Tesseract-OCR\tesseract.exe'),
+        os.path.expandvars(r'%APPDATA%\Tesseract-OCR\tesseract.exe'),
+    ]
+    for p in candidates:
+        if Path(p).exists():
+            return p
+    return 'tesseract'  # last resort — let pytesseract try PATH itself
+
+
+TESSERACT_CMD = _find_tesseract()
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
@@ -72,7 +99,7 @@ async def ocr_image(image: UploadFile = File(...)):
         import pytesseract
         from PIL import Image, ImageFilter, ImageOps
         import io, re
-        pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+        pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
 
         img = Image.open(io.BytesIO(await image.read()))
 
@@ -95,7 +122,18 @@ async def ocr_image(image: UploadFile = File(...)):
             if n > best_count:
                 best_count, best_text = n, t
 
-        return {"text": best_text, "status": "ok", "dates_found": best_count}
+        # Parse structured patients (with provider) from the OCR text
+        patients = []
+        providers_seen = {}
+        for line in best_text.split('\n'):
+            p = _parse_pdf_text_line(line.strip())
+            if p:
+                patients.append(p)
+                if p.get('provider'):
+                    providers_seen[p['provider']] = True
+
+        return {"text": best_text, "status": "ok", "dates_found": best_count,
+                "patients": patients, "providers": list(providers_seen)}
     except ImportError:
         raise HTTPException(status_code=503, detail="pytesseract not installed. Run: pip install pytesseract pillow")
     except Exception as e:
@@ -107,6 +145,7 @@ async def register_patient(
     patient_name: str = Form(...),
     patient_dob: str = Form(""),
     clinic_date: str = Form(""),
+    provider: str = Form(""),
 ):
     """Register a patient with no images yet (placeholder for pending preload)."""
     index = load_index()
@@ -116,10 +155,14 @@ async def register_patient(
             "name": patient_name,
             "dob": patient_dob,
             "clinic_date": clinic_date,
+            "provider": provider,
             "studies": {},
             "image_count": 0,
             "created_at": datetime.now().isoformat(),
         }
+        save_index(index)
+    elif provider and not index["patients"][patient_key].get("provider"):
+        index["patients"][patient_key]["provider"] = provider
         save_index(index)
     return {"status": "registered", "key": patient_key}
 
@@ -141,6 +184,7 @@ async def receive_image(
     rows: str = Form(""),
     cols: str = Form(""),
     pixel_spacing: str = Form(""),
+    provider: str = Form(""),
 ):
     """Receive an image from the Chrome extension and store it locally."""
 
@@ -155,12 +199,16 @@ async def receive_image(
             "name": patient_name,
             "dob": patient_dob,
             "clinic_date": clinic_date,
+            "provider": provider,
             "studies": {},
             "image_count": 0,
             "created_at": datetime.now().isoformat(),
         }
-    elif clinic_date and not index["patients"][patient_key].get("clinic_date"):
-        index["patients"][patient_key]["clinic_date"] = clinic_date
+    else:
+        if clinic_date and not index["patients"][patient_key].get("clinic_date"):
+            index["patients"][patient_key]["clinic_date"] = clinic_date
+        if provider and not index["patients"][patient_key].get("provider"):
+            index["patients"][patient_key]["provider"] = provider
 
     patient = index["patients"][patient_key]
     # Use study UID when available; fall back to description+date so studies from
@@ -242,6 +290,7 @@ def list_patients():
             "name": data["name"],
             "dob": data["dob"],
             "clinic_date": data.get("clinic_date", ""),
+            "provider": data.get("provider", ""),
             "image_count": data["image_count"],
             "study_count": len(data["studies"]),
         })
@@ -499,7 +548,7 @@ def _ocr_pdf_page(pdf_bytes: bytes, page_index: int) -> str:
         import pytesseract
         from PIL import Image
         import io as _io
-        pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+        pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
 
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         pg  = doc[page_index]
