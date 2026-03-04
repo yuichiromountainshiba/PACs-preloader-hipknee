@@ -622,56 +622,69 @@ def _parse_pdf_tables(page):
     return patients
 
 
-def _parse_pdf_text_line(line):
-    """Parse a single text line for name + DOB + provider. Returns patient dict or None.
+_SCHEDULE_LINE_PAT = re.compile(
+    r'(\d{1,2}:\d{2}\s*[AP]M)'   # group 1: appointment time
+    r'\s+'
+    r'(.+?)'                       # group 2: patient name (lazy)
+    r'\s+'
+    r'(\d{1,2}/\d{1,2}/\d{4})'   # group 3: DOB (4-digit year — most reliable OCR element)
+    r'(?:\s+(\S.*))?$',            # group 4: provider (optional)
+    re.IGNORECASE,
+)
 
-    Expected schedule format:
-        {icon} {H:MM[AM|PM]} {Last, First MI.} {M/D/YYYY} {Provider, Cred}
-    e.g. "@ 8:30AM Smith, John A. 6/25/1984 Erickson, Curt, PA-C"
+_SKIP_WORDS = [
+    'spine', 'Time', 'Patient', 'Page ', 'Printed by',
+    'DOB', 'Provider', 'continued', 'Total:', 'Last refresh',
+]
+
+
+def _parse_pdf_text_line(line):
+    """Parse a single OCR/text line for name + DOB + provider.
+
+    Applies the same pre-cleaning logic as the Epic clinic schedule parser
+    (strip colored-dot OCR artifacts before the time, fix '38:30AM' glitch,
+    normalize ALL-CAPS names) before matching with the anchor regex.
+
+    Expected Epic schedule format:
+        {icon} {H:MM AM/PM} {Last, First MI.} {M/D/YYYY} {Provider, Cred}
+    e.g. "@ 8:30 AM Smith, John A. 6/25/1984 Erickson, Curt, PA-C"
     """
     if not line:
         return None
-    date_pat = re.compile(r'\b(\d{1,2})[/\-](\d{1,2})[/\-](\d{2,4})\b')
-    time_pat = re.compile(r'\b\d{1,2}:\d{2}\s*(?:AM|PM)?\s*', re.IGNORECASE)
 
-    date_m = date_pat.search(line)
-    if not date_m:
+    # Skip known header / footer / summary lines
+    if any(s in line for s in _SKIP_WORDS):
         return None
 
-    mo, d, y = date_m.group(1), date_m.group(2), date_m.group(3)
-    if len(y) == 2:
-        y = ('19' if int(y) > 30 else '20') + y
-    dob = f"{mo}/{d}/{y}"
+    # ── Pre-clean OCR artifacts that appear before the appointment time ──
+    # Colored appointment-type dots are often read as @, ©, O, T, r, digits, etc.
+    # Strip everything up to the first H:MM pattern.
+    cleaned = re.sub(r'^[^0-9]*?(?=\d{1,2}:\d{2})', '', line)
+    # Stray single digit inserted before time: "6 1:00 PM" → "1:00 PM"
+    cleaned = re.sub(r'^\d\s+(?=\d{1,2}:\d{2})', '', cleaned)
+    # Leading-3 glitch: "38:30 AM" → "8:30 AM" (dot OCR'd as '3')
+    cleaned = re.sub(r'^3(\d:\d{2})', r'\1', cleaned)
 
-    before = line[:date_m.start()]
+    m = _SCHEDULE_LINE_PAT.match(cleaned)
+    if not m:
+        return None
 
-    # Find the appointment time that precedes the patient name.
-    # If no time appears before the DOB, this line is likely a header or summary
-    # (e.g. "spine - 3/3/2026 Total: 59 Last refresh: 7:37 PM") — reject it.
-    time_m = time_pat.search(before)
-    if time_m:
-        # Name is everything between the end of the time and the DOB
-        name_raw = before[time_m.end():]
-    else:
-        # No time before DOB — fall back to old stripping but require a comma
-        name_raw = re.sub(r'\b\d{5,}\b', '', before)  # strip MRN-style numbers
-        if ',' not in name_raw:
-            return None
+    time_str, name_raw, dob, provider = m.group(1), m.group(2), m.group(3), (m.group(4) or '')
 
-    name = re.sub(r'\s{2,}', ' ', name_raw.replace('\t', ' ')).strip().rstrip(',').strip()
+    # Normalize time: "10:00AM" → "10:00 AM"
+    time_str = re.sub(r'(\d{2})([AP]M)', r'\1 \2', time_str, flags=re.IGNORECASE).strip()
+
+    # Clean name
+    name = re.sub(r'\s{2,}', ' ', name_raw.replace('\t', ' ')).strip().rstrip('.,').strip()
     if not name or len(name) < 3:
         return None
 
-    # Reject header / footer / summary lines by keyword
-    # e.g. "Page 1 of 2", "Total: 59", "Last refresh:", "spine - 3/3/2026 Total:..."
-    if re.search(r'\bpage\s+\d+\b|\bof\s+\d+\b|\btotal\b|\brefresh\b|\bschedule\b|\bprinted\b',
-                 name, re.IGNORECASE):
-        return None
+    # Fix ALL-CAPS OCR names → title case: "SHERIDAN, BRANDON" → "Sheridan, Brandon"
+    if name == name.upper() and len(name) > 3:
+        parts = name.split(',')
+        name = ', '.join(p.strip().title() for p in parts)
 
-    # Provider is everything after the DOB date
-    provider = line[date_m.end():].strip()
-
-    return {"name": name, "dob": dob, "clinic_date": "", "provider": provider}
+    return {"name": name, "dob": dob, "clinic_date": "", "provider": provider.strip(), "time": time_str}
 
 
 def _detect_columns(header):
