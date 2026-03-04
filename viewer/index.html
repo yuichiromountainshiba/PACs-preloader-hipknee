@@ -655,6 +655,9 @@
   // Snapshot mode state
   let snapshotPatientKey = null;
 
+  // Tracks which patient is currently open in the viewer
+  let activePatientKey = null;
+
   // Per-patient refresh tracking: key → timestamp (ms) when refresh was requested
   const pendingRefreshKeys = new Map();
 
@@ -734,19 +737,35 @@
   // ── Load Patients ──
   async function loadPatients() {
     try {
-      const resp = await fetch(`${API}/api/patients`);
-      const data = await resp.json();
-      // Clear pending refresh indicator when image count has grown (refresh fulfilled)
+      const [patientsResp, pendingResp] = await Promise.all([
+        fetch(`${API}/api/patients`),
+        fetch(`${API}/api/pending_refreshes`),
+      ]);
+      const data = await patientsResp.json();
+      const serverPending = new Set(
+        Object.keys((pendingResp.ok ? await pendingResp.json() : { pending: {} }).pending || {})
+      );
+
+      // Add any server-pending keys we don't know about (e.g. viewer opened mid-refresh)
+      for (const key of serverPending) {
+        if (!pendingRefreshKeys.has(key)) pendingRefreshKeys.set(key, Date.now());
+      }
+
+      // Keys the extension has finished: clear spinner + show result + reload if open
       for (const p of data.patients) {
-        if (pendingRefreshKeys.has(p.key)) {
+        if (pendingRefreshKeys.has(p.key) && !serverPending.has(p.key)) {
           const prevEl = document.querySelector(`[data-key="${CSS.escape(p.key)}"] .patient-badge`);
           const prevCount = prevEl ? parseInt(prevEl.textContent) : -1;
+          pendingRefreshKeys.delete(p.key);
           if (p.image_count > prevCount) {
-            pendingRefreshKeys.delete(p.key);
             showToast(`✓ ${p.name} refreshed — ${p.image_count} image${p.image_count !== 1 ? 's' : ''} now`, 'success');
+          } else {
+            showToast(`↻ ${p.name} — refresh complete, no new images found`, 'info');
           }
+          if (p.key === activePatientKey) selectPatient(p.key);
         }
       }
+
       allLoadedPatients = data.patients;
       updateProviderFilterBar(data.patients);
       const visible = selectedViewerProviders.size
@@ -896,6 +915,7 @@
   // ── Select Patient ──
   async function selectPatient(key) {
     activeStudyKey = null;
+    activePatientKey = key;
     document.querySelectorAll('.patient-item').forEach(el => el.classList.remove('active'));
     const el = document.querySelector(`[data-key="${key}"]`);
     if (el) el.classList.add('active');

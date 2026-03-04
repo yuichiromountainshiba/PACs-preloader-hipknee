@@ -311,6 +311,8 @@ def get_patient(patient_key: str):
     return {
         "name": patient["name"],
         "dob": patient["dob"],
+        "clinic_date": patient.get("clinic_date", ""),
+        "provider": patient.get("provider", ""),
         "studies": patient["studies"],
     }
 
@@ -632,22 +634,78 @@ _SCHEDULE_LINE_PAT = re.compile(
     re.IGNORECASE,
 )
 
+# Fallback for lines where the time column was blank (no H:MM in OCR output)
+_FALLBACK_PAT = re.compile(
+    r"([A-Za-z][A-Za-z\-\']+,\s*[A-Za-z].+?)"  # name with comma (Last, First …)
+    r'\s+'
+    r'(\d{1,2}/\d{1,2}/\d{4})'                  # DOB
+    r'(?:\s+(\S.*))?$',
+)
+
 _SKIP_WORDS = [
-    'spine', 'Time', 'Patient', 'Page ', 'Printed by',
+    'Time', 'Patient', 'Page ', 'Printed by',
     'DOB', 'Provider', 'continued', 'Total:', 'Last refresh',
 ]
+
+
+def _restore_dob_slashes(line):
+    """Fix OCR-dropped slashes in 6-8 digit runs that look like dates.
+
+    '721958'  → '7/2/1958'
+    '2121957' → '2/12/1957'
+    Unambiguous cases only — leaves garbled strings like '21211957' alone.
+    """
+    def _fix(m):
+        digits = m.group(0)
+        y = digits[-4:]
+        try:
+            yr = int(y)
+            if not (1920 <= yr <= 2025):
+                return digits
+        except Exception:
+            return digits
+        rem = digits[:-4]
+        if len(rem) == 2:
+            mo, d = rem[0], rem[1]
+        elif len(rem) == 3:
+            mo, d = rem[0], rem[1:]
+        elif len(rem) == 4:
+            mo, d = rem[:2], rem[2:]
+            if not (1 <= int(mo) <= 12):   # MMDD ambiguous — try single-digit month
+                mo, d = rem[0], rem[1:3]
+        else:
+            return digits
+        try:
+            if 1 <= int(mo) <= 12 and 1 <= int(d) <= 31:
+                return f"{int(mo)}/{int(d)}/{y}"
+        except Exception:
+            pass
+        return digits
+    return re.sub(r'\b\d{6,8}\b', _fix, line)
+
+
+def _clean_name(raw):
+    name = re.sub(r'\s{2,}', ' ', raw.replace('\t', ' ')).strip().rstrip('.,').strip()
+    if not name or len(name) < 3:
+        return None
+    # Title-case any comma-separated part that is entirely uppercase
+    # e.g. "SHERIDAN, Brandon" → "Sheridan, Brandon"
+    #      "SMITH, JOHN A."   → "Smith, John A."
+    parts = [p.strip() for p in name.split(',')]
+    name = ', '.join(p.title() if (p and p == p.upper() and len(p) > 1) else p for p in parts)
+    return name
 
 
 def _parse_pdf_text_line(line):
     """Parse a single OCR/text line for name + DOB + provider.
 
-    Applies the same pre-cleaning logic as the Epic clinic schedule parser
-    (strip colored-dot OCR artifacts before the time, fix '38:30AM' glitch,
-    normalize ALL-CAPS names) before matching with the anchor regex.
+    Handles three common Epic OCR failure modes:
+      1. Missing colon in time  — '200PM'    → '2:00 PM'
+      2. Missing slashes in DOB — '721958'   → '7/2/1958'
+      3. Missing time entirely  — fallback pattern (name comma + DOB)
 
     Expected Epic schedule format:
         {icon} {H:MM AM/PM} {Last, First MI.} {M/D/YYYY} {Provider, Cred}
-    e.g. "@ 8:30 AM Smith, John A. 6/25/1984 Erickson, Curt, PA-C"
     """
     if not line:
         return None
@@ -656,35 +714,40 @@ def _parse_pdf_text_line(line):
     if any(s in line for s in _SKIP_WORDS):
         return None
 
-    # ── Pre-clean OCR artifacts that appear before the appointment time ──
-    # Colored appointment-type dots are often read as @, ©, O, T, r, digits, etc.
-    # Strip everything up to the first H:MM pattern.
-    cleaned = re.sub(r'^[^0-9]*?(?=\d{1,2}:\d{2})', '', line)
-    # Stray single digit inserted before time: "6 1:00 PM" → "1:00 PM"
+    # ── Fix 1: insert missing colon — "200PM" → "2:00 PM", "400PM" → "4:00 PM"
+    # Must run BEFORE artifact-strip so the lookahead can find H:MM afterwards.
+    cleaned = re.sub(r'(?<!\d)(\d{1,2})(\d{2})\s*([AP]M)\b', r'\1:\2 \3', line, flags=re.IGNORECASE)
+
+    # ── Strip leading OCR artifacts before the appointment time ──
+    cleaned = re.sub(r'^[^0-9]*?(?=\d{1,2}:\d{2})', '', cleaned)
+    # Stray single digit before time: "6 1:00 PM" → "1:00 PM"
     cleaned = re.sub(r'^\d\s+(?=\d{1,2}:\d{2})', '', cleaned)
-    # Leading-3 glitch: "38:30 AM" → "8:30 AM" (dot OCR'd as '3')
+    # Leading-3 glitch: "38:30 AM" → "8:30 AM" (appointment dot OCR'd as '3')
     cleaned = re.sub(r'^3(\d:\d{2})', r'\1', cleaned)
 
+    # ── Fix 2: restore slashes in slashless DOBs ──
+    cleaned = _restore_dob_slashes(cleaned)
+
     m = _SCHEDULE_LINE_PAT.match(cleaned)
-    if not m:
+    if m:
+        time_str = re.sub(r'(\d{2})([AP]M)', r'\1 \2', m.group(1), flags=re.IGNORECASE).strip()
+        name = _clean_name(m.group(2))
+        if not name:
+            return None
+        return {"name": name, "dob": m.group(3), "clinic_date": "",
+                "provider": (m.group(4) or '').strip(), "time": time_str}
+
+    # ── Fix 3: fallback for lines with no time (blank time column in schedule) ──
+    bare = re.sub(r'^[^A-Za-z]+', '', line).strip()   # strip leading non-alpha (@ © = etc.)
+    bare = _restore_dob_slashes(bare)
+    m2 = _FALLBACK_PAT.match(bare)
+    if not m2:
         return None
-
-    time_str, name_raw, dob, provider = m.group(1), m.group(2), m.group(3), (m.group(4) or '')
-
-    # Normalize time: "10:00AM" → "10:00 AM"
-    time_str = re.sub(r'(\d{2})([AP]M)', r'\1 \2', time_str, flags=re.IGNORECASE).strip()
-
-    # Clean name
-    name = re.sub(r'\s{2,}', ' ', name_raw.replace('\t', ' ')).strip().rstrip('.,').strip()
-    if not name or len(name) < 3:
+    name = _clean_name(m2.group(1))
+    if not name:
         return None
-
-    # Fix ALL-CAPS OCR names → title case: "SHERIDAN, BRANDON" → "Sheridan, Brandon"
-    if name == name.upper() and len(name) > 3:
-        parts = name.split(',')
-        name = ', '.join(p.strip().title() for p in parts)
-
-    return {"name": name, "dob": dob, "clinic_date": "", "provider": provider.strip(), "time": time_str}
+    return {"name": name, "dob": m2.group(2), "clinic_date": "",
+            "provider": (m2.group(3) or '').strip(), "time": ""}
 
 
 def _detect_columns(header):
@@ -955,11 +1018,20 @@ function render(data) {
     // Text-line parse results (pdfplumber text)
     if (!pg.is_image_page) {
       html += '<div class="section"><h3>Line-by-line Parse Results (first 80 lines)</h3>';
-      html += '<table><tr><th>#</th><th>Line</th><th>Parsed patient?</th></tr>';
+      html += '<table><tr><th>#</th><th>Raw line</th><th>Time</th><th>Name</th><th>DOB</th><th>Provider</th></tr>';
       pg.text_lines.forEach((l, i) => {
         const cls = l.parsed ? 'match' : 'no-match';
-        const parsed = l.parsed ? esc(l.parsed.name) + ' &nbsp; DOB: ' + esc(l.parsed.dob) : '—';
-        html += '<tr><td style="color:#475569">' + (i+1) + '</td><td class="' + cls + '">' + esc(l.line) + '</td><td class="' + cls + '">' + parsed + '</td></tr>';
+        if (l.parsed) {
+          html += '<tr><td style="color:#475569">' + (i+1) + '</td>'
+            + '<td class="match">' + esc(l.line) + '</td>'
+            + '<td class="match">' + esc(l.parsed.time || '') + '</td>'
+            + '<td class="match">' + esc(l.parsed.name) + '</td>'
+            + '<td class="match">' + esc(l.parsed.dob) + '</td>'
+            + '<td class="match">' + esc(l.parsed.provider || '') + '</td></tr>';
+        } else {
+          html += '<tr><td style="color:#475569">' + (i+1) + '</td>'
+            + '<td class="no-match" colspan="5">' + esc(l.line) + '</td></tr>';
+        }
       });
       html += '</table></div>';
     }
@@ -973,11 +1045,19 @@ function render(data) {
         html += '<div style="font-size:11px;color:#64748b;margin-bottom:6px">OCR raw text (' + pg.ocr_lines.length + ' lines):</div>';
         html += '<div class="raw-text">' + esc(pg.ocr_text) + '</div>';
         html += '<h3 style="margin-top:8px">OCR Line-by-line Parse (first 80 lines)</h3>';
-        html += '<table><tr><th>#</th><th>Line</th><th>Parsed patient?</th></tr>';
+        html += '<table><tr><th>#</th><th>Raw line</th><th>Time</th><th>Name</th><th>DOB</th><th>Provider</th></tr>';
         pg.ocr_lines.forEach((l, i) => {
-          const cls = l.parsed ? 'match' : 'no-match';
-          const parsed = l.parsed ? esc(l.parsed.name) + ' &nbsp; DOB: ' + esc(l.parsed.dob) : '—';
-          html += '<tr><td style="color:#475569">' + (i+1) + '</td><td class="' + cls + '">' + esc(l.line) + '</td><td class="' + cls + '">' + parsed + '</td></tr>';
+          if (l.parsed) {
+            html += '<tr><td style="color:#475569">' + (i+1) + '</td>'
+              + '<td class="match">' + esc(l.line) + '</td>'
+              + '<td class="match">' + esc(l.parsed.time || '') + '</td>'
+              + '<td class="match">' + esc(l.parsed.name) + '</td>'
+              + '<td class="match">' + esc(l.parsed.dob) + '</td>'
+              + '<td class="match">' + esc(l.parsed.provider || '') + '</td></tr>';
+          } else {
+            html += '<tr><td style="color:#475569">' + (i+1) + '</td>'
+              + '<td class="no-match" colspan="5">' + esc(l.line) + '</td></tr>';
+          }
         });
         html += '</table>';
       } else {

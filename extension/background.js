@@ -124,33 +124,67 @@ async function registerPatientPlaceholder(pt, serverUrl, clinicDate) {
 
 // ── Pending Refresh Poll ──
 async function pollPendingRefreshes() {
-  if (isPreloading || !pacsTabId) return;
+  if (isPreloading) return;
+  console.log('[Refresh] poll fired — pacsTabId:', pacsTabId);
+
+  // Recover pacsTabId if service worker restarted (in-memory state lost)
+  if (!pacsTabId) {
+    const allTabs = await chrome.tabs.query({}).catch(() => []);
+    console.log('[Refresh] all tabs:', allTabs.map(t => t.id + ' ' + t.url));
+    const pacsTabs = allTabs.filter(t => t.url && t.url.includes('pacs.renoortho.com'));
+    console.log('[Refresh] PACS tabs found:', pacsTabs.length);
+    if (!pacsTabs.length) { console.log('[Refresh] no PACS tab — aborting'); return; }
+    pacsTabId = pacsTabs[0].id;
+    console.log('[Refresh] recovered pacsTabId:', pacsTabId);
+  }
+
   try {
     const saved = await chrome.storage.local.get(['serverUrl', 'clinicDate']);
-    const serverUrl = (saved.serverUrl || '').replace(/\/$/, '');
-    if (!serverUrl) return;
+    const serverUrl = (saved.serverUrl || 'http://localhost:8888').replace(/\/$/, '');
+    console.log('[Refresh] serverUrl:', serverUrl);
     const clinicDate = saved.clinicDate || '';
-    const filters = await getFiltersFromStorage();
+    // Refreshes only fetch new X-rays — fast targeted lookup
+    const baseFilters = await getFiltersFromStorage();
+    const filters = { ...baseFilters, modalities: ['xr'] };
 
     const resp = await fetch(`${serverUrl}/api/pending_refreshes`);
-    if (!resp.ok) return;
+    if (!resp.ok) { console.log('[Refresh] pending_refreshes returned', resp.status); return; }
     const data = await resp.json();
+    const pendingKeys = Object.keys(data.pending || {});
+    console.log('[Refresh] pending keys:', pendingKeys);
 
     for (const [key] of Object.entries(data.pending || {})) {
-      const patient = scheduledPatients.find(p => buildPatientKey(p) === key);
-      if (patient && !refreshesInProgress.has(key)) {
-        refreshesInProgress.add(key);
-        postToPopup({ action: 'preloadLog', text: `Auto-refreshing: ${patient.name}`, cls: 'info' });
+      if (refreshesInProgress.has(key)) { console.log('[Refresh] already in progress:', key); continue; }
+
+      // Try in-memory list first; fall back to server lookup (handles service worker restart)
+      let patient = scheduledPatients.find(p => buildPatientKey(p) === key);
+      if (!patient) {
+        console.log('[Refresh] patient not in memory — fetching from server:', key);
         try {
-          await preloadPatient(patient, serverUrl, clinicDate, filters);
-          await fetch(`${serverUrl}/api/pending_refreshes/${encodeURIComponent(key)}`, { method: 'DELETE' });
-        } catch (e) {
-          postToPopup({ action: 'preloadLog', text: `  ✗ Refresh error: ${e.message}`, cls: 'error' });
-        }
-        refreshesInProgress.delete(key);
+          const pr = await fetch(`${serverUrl}/api/patients/${encodeURIComponent(key)}`);
+          console.log('[Refresh] patient fetch status:', pr.status);
+          if (!pr.ok) continue;
+          const pd = await pr.json();
+          patient = { name: pd.name, dob: pd.dob, provider: pd.provider || '', clinic_date: pd.clinic_date || '' };
+          console.log('[Refresh] patient from server:', patient.name);
+        } catch (e) { console.log('[Refresh] patient fetch error:', e.message); continue; }
       }
+
+      refreshesInProgress.add(key);
+      postToPopup({ action: 'preloadLog', text: `Auto-refreshing: ${patient.name}`, cls: 'info' });
+      console.log('[Refresh] starting preloadPatient for', patient.name);
+      try {
+        const ptClinicDate = clinicDate || patient.clinic_date || '';
+        await preloadPatient(patient, serverUrl, ptClinicDate, filters);
+        await fetch(`${serverUrl}/api/pending_refreshes/${encodeURIComponent(key)}`, { method: 'DELETE' });
+        console.log('[Refresh] done + cleared pending for', patient.name);
+      } catch (e) {
+        console.log('[Refresh] preloadPatient error:', e.message);
+        postToPopup({ action: 'preloadLog', text: `  ✗ Refresh error: ${e.message}`, cls: 'error' });
+      }
+      refreshesInProgress.delete(key);
     }
-  } catch (e) { /* server may be unreachable */ }
+  } catch (e) { console.log('[Refresh] outer error:', e.message); }
 }
 
 async function getFiltersFromStorage() {
@@ -170,9 +204,25 @@ function buildPatientKey(pt) {
   return combined.replace(/[^\w\s\-.]/g, '').replace(/\s+/g, '_').slice(0, 100);
 }
 
-function sendToContentScript(action, data) {
+async function sendToContentScript(action, data) {
+  try {
+    return await _sendTabMessage(pacsTabId, action, data);
+  } catch (e) {
+    if (e.message.includes('Receiving end does not exist')) {
+      // Content script not loaded (tab opened before extension, or SW restarted).
+      // Inject it now and retry once.
+      console.log('[Refresh] content script missing — injecting into tab', pacsTabId);
+      await chrome.scripting.executeScript({ target: { tabId: pacsTabId }, files: ['content.js'] });
+      await sleep(400);
+      return await _sendTabMessage(pacsTabId, action, data);
+    }
+    throw e;
+  }
+}
+
+function _sendTabMessage(tabId, action, data) {
   return new Promise((resolve, reject) => {
-    chrome.tabs.sendMessage(pacsTabId, { action, ...data }, response => {
+    chrome.tabs.sendMessage(tabId, { action, ...data }, response => {
       if (chrome.runtime.lastError) {
         reject(new Error(chrome.runtime.lastError.message));
       } else {

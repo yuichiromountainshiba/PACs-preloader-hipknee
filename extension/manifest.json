@@ -5,6 +5,8 @@
   "description": "Preload clinic X-rays — DOM-based UI automation (no GWT-RPC parsing)",
   "permissions": [
     "activeTab",
+    "tabs",
+    "scripting",
     "storage",
     "cookies",
     "alarms"

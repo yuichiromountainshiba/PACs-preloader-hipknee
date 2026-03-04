@@ -43,6 +43,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (saved.schedule)   $('#schedule').value = saved.schedule;
   if (saved.serverUrl)  $('#serverUrl').value = saved.serverUrl;
   if (saved.clinicDate) $('#clinicDate').value = saved.clinicDate;
+  // Persist the current serverUrl value (covers the case where user never changed it
+  // from the HTML default, so it was never written to storage for the service worker)
+  if (!saved.serverUrl) chrome.storage.local.set({ serverUrl: $('#serverUrl').value });
   for (const id of FILTER_KEYS) {
     if (saved[id] != null) $(`#${id}`).checked = saved[id];
   }
