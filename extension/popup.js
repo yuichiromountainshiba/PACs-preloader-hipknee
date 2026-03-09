@@ -110,6 +110,14 @@ function parseSchedule(text) {
       trimmed = trimmed.slice(0, provMatch.index).trim();
     }
 
+    // Extract visit time if present (H:MM AM/PM at start of line)
+    let visitTime = '';
+    const timeMatch = trimmed.match(/^(\d{1,2}:\d{2}\s*[AP]M)\s+/i);
+    if (timeMatch) {
+      visitTime = timeMatch[1].replace(/(\d{1,2})(\d{2})([AP]M)/i, '$1:$2 $3').trim();
+      trimmed = trimmed.slice(timeMatch[0].length);
+    }
+
     const dobMatch = trimmed.match(/(\d{1,2}\/\d{1,2}\/\d{4})\s*$/);
     if (!dobMatch) {
       log(`⚠ Skipping (no DOB): ${trimmed}`, 'error');
@@ -120,7 +128,7 @@ function parseSchedule(text) {
     const name = trimmed.slice(0, dobMatch.index).trim().replace(/[,\t]+$/, '').trim();
     if (!name) { log(`⚠ Skipping (no name): ${trimmed}`, 'error'); continue; }
 
-    patients.push({ name, dob, provider });
+    patients.push({ name, dob, provider, visitTime });
   }
 
   return patients;
@@ -415,7 +423,13 @@ function updateOcrProviderBtn() {
 function updateOcrTextarea() {
   const filtered = ocrParsedPatients
     .filter(p => !p.provider || ocrSelectedProviders.has(p.provider))
-    .map(p => p.provider ? `${p.name}  ${p.dob}  # ${p.provider}` : `${p.name}  ${p.dob}`);
+    .map(p => {
+      let line = '';
+      if (p.time) line += `${p.time}  `;
+      line += `${p.name}  ${p.dob}`;
+      if (p.provider) line += `  # ${p.provider}`;
+      return line;
+    });
   document.getElementById('ocrResult').value = filtered.join('\n');
 }
 
@@ -531,7 +545,13 @@ function updateProviderBtn() {
 function applyPdfResult() {
   const filtered = parsedPdfPatients
     .filter(p => !p.provider || selectedProviders.has(p.provider))
-    .map(p => p.provider ? `${p.name}  ${p.dob}  # ${p.provider}` : `${p.name}  ${p.dob}`);
+    .map(p => {
+      let line = '';
+      if (p.time) line += `${p.time}  `;
+      line += `${p.name}  ${p.dob}`;
+      if (p.provider) line += `  # ${p.provider}`;
+      return line;
+    });
   if (!filtered.length) return;
   const current = $('#schedule').value.trim();
   $('#schedule').value = current ? `${current}\n${filtered.join('\n')}` : filtered.join('\n');

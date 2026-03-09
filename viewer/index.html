@@ -292,15 +292,22 @@
     .patient-item { position: relative; }
     .patient-item-inner { display: flex; align-items: flex-start; gap: 4px; }
     .patient-item-content { flex: 1; min-width: 0; }
-    .patient-refresh-btn {
+    .patient-refresh-btn, .patient-edit-btn {
       background: none; border: none; color: #334155; cursor: pointer;
       padding: 4px; line-height: 0; border-radius: 4px; flex-shrink: 0; margin-top: 2px;
       transition: color 0.15s; -webkit-tap-highlight-color: transparent;
     }
     .patient-refresh-btn:hover { color: #64748b; }
+    .patient-edit-btn:hover { color: #64748b; }
     .patient-item.refresh-pending .patient-name::after { content: ' ↻'; display: inline-block; animation: spin 1s linear infinite; }
     @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
     .refresh-pending-age { color: #f59e0b; font-size: 10px; }
+    .patient-name-input {
+      background: #0f172a; border: 1px solid #3b82f6; border-radius: 4px;
+      color: #f1f5f9; font-size: 15px; font-weight: 500; padding: 1px 5px;
+      width: 100%; box-sizing: border-box; outline: none;
+    }
+    .patient-visit-time { font-size: 10px; color: #38bdf8; margin-left: 4px; }
 
     /* Toast notifications */
     .toast {
@@ -583,7 +590,6 @@
     <div class="report-body" id="reportBody"></div>
   </div>
 </div>
-
 <script>
   const API = window.location.origin;
 
@@ -606,7 +612,7 @@
           const d = await r.json();
           if (!d.patientKey) { _lastSyncStr = ''; return; }
 
-          const syncStr = `${d.patientKey}|${d.studyKey}|${d.imgIndex}|${d.viewMode}|${d.region}`;
+          const syncStr = `${d.patientKey}|${d.studyKey}|${d.imgIndex}|${d.viewMode}|${d.region}|${d.compareTop}|${d.compareBottom}`;
           if (syncStr === _lastSyncStr) return;
           _lastSyncStr = syncStr;
 
@@ -624,9 +630,22 @@
             if (d.studyKey !== activeStudyKey) openStudyRow(d.studyKey);
           } else if (d.viewMode === 'snapshot') {
             if (viewMode !== 'snapshot') toggleSnapshotMode();
+          } else if (d.viewMode === 'compare') {
+            if (viewMode !== 'compare') {
+              if (viewMode === 'snapshot') exitSnapshotMode();
+              if (d.compareTop) compareTopStudyKey = d.compareTop;
+              if (d.compareBottom) compareBottomStudyKey = d.compareBottom;
+              toggleCompareMode();
+            } else if (d.compareTop !== compareTopStudyKey || d.compareBottom !== compareBottomStudyKey) {
+              if (d.compareTop) compareTopStudyKey = d.compareTop;
+              if (d.compareBottom) compareBottomStudyKey = d.compareBottom;
+              renderCompareChips();
+              renderCompareImages();
+            }
           } else {
             // 'single' or any other value
             if (viewMode === 'snapshot') exitSnapshotMode();
+            if (viewMode === 'compare') exitCompareMode();
             if (viewMode === 'row') {
               viewMode = 'single';
               document.getElementById('rowView').style.display = 'none';
@@ -829,6 +848,7 @@
     }
 
     const refreshSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>`;
+    const editSvg = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`;
     const arrowSvg = `<svg class="collapse-arrow" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>`;
     const reportSvg = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>`;
 
@@ -847,14 +867,16 @@
       for (const p of pts) {
         const isPending = pendingRefreshKeys.has(p.key);
         const pendingAge = isPending ? formatRefreshAge(pendingRefreshKeys.get(p.key)) : '';
+        const visitTimeStr = p.clinic_time ? `<span class="patient-visit-time">· ${escHtml(p.clinic_time)}</span>` : '';
         html += `<div class="patient-item${isPending ? ' refresh-pending' : ''}" data-key="${escAttr(p.key)}" onclick="selectPatient('${escAttr(p.key)}')">
           <div class="patient-item-inner">
             <div class="patient-item-content">
-              <div class="patient-name">${escHtml(p.name)}</div>
+              <div class="patient-name">${escHtml(p.name)}${visitTimeStr}</div>
               <div class="patient-meta">DOB: ${escHtml(p.dob)}${pendingAge ? ` · <span class="refresh-pending-age">↻ ${escHtml(pendingAge)}</span>` : ''}</div>
               ${p.provider ? `<div class="patient-provider">${escHtml(p.provider)}</div>` : ''}
               <span class="patient-badge">${p.image_count} image${p.image_count !== 1 ? 's' : ''} · ${p.study_count} study</span>
             </div>
+            <button class="patient-edit-btn" title="Edit patient name" onclick="event.stopPropagation(); startEditPatientName('${escAttr(p.key)}', '${escAttr(p.name)}')">${editSvg}</button>
             <button class="patient-refresh-btn" title="Request refresh" onclick="event.stopPropagation(); requestPatientRefresh('${escAttr(p.key)}')">${refreshSvg}</button>
           </div>
         </div>`;
@@ -893,6 +915,46 @@
       pendingRefreshKeys.delete(key);
       if (el) el.classList.remove('refresh-pending');
     }
+  }
+
+  // ── Edit Patient Name ──
+  function startEditPatientName(key, currentName) {
+    const nameEl = document.querySelector(`[data-key="${CSS.escape(key)}"] .patient-name`);
+    if (!nameEl) return;
+    const input = document.createElement('input');
+    input.className = 'patient-name-input';
+    input.value = currentName;
+    input.onclick = e => e.stopPropagation();
+    let saved = false;
+    input.onkeydown = e => {
+      if (e.key === 'Enter') { saved = true; savePatientName(key, input.value); }
+      if (e.key === 'Escape') loadPatients();
+    };
+    input.onblur = () => { if (!saved) savePatientName(key, input.value); };
+    nameEl.replaceWith(input);
+    input.focus();
+    input.select();
+  }
+
+  async function savePatientName(key, newName) {
+    newName = (newName || '').trim();
+    if (!newName) { loadPatients(); return; }
+    try {
+      const resp = await fetch(`${API}/api/patients/${encodeURIComponent(key)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newName }),
+      });
+      if (resp.ok) {
+        showToast(`Name updated — queuing refresh for "${newName}"`, 'info');
+        await requestPatientRefresh(key);
+      } else {
+        showToast('Failed to update name', 'error');
+      }
+    } catch (e) {
+      showToast('Server unreachable — is it running?', 'error');
+    }
+    await loadPatients();
   }
 
   function showToast(msg, type = 'info') {
@@ -1072,18 +1134,21 @@
     return 9;
   }
 
-  // MRI series order: 0 sag T2, 1 ax T2, 2 sag STIR, 3 sag T1, 9 other
+  // MRI series order: 0 sag T2, 1 ax T2/T2-equiv, 2 sag STIR, 3 sag T1, 4 other axial, 9 other
   function getMriSeriesOrder(seriesLabel) {
     const L = (seriesLabel || '').toLowerCase().replace(/[^\w\s]/g, '');
-    const hasSag = /\bsag\b/.test(L);
-    const hasAx = /\bax\b/.test(L) || /axial/.test(L);
-    const hasT2 = /\bt2\b/.test(L);
+    const hasSag  = /\bsag\b/.test(L);
+    const hasAx   = /\bax\b/.test(L) || /axial/.test(L);
+    const hasT2   = /\bt2\b/.test(L);
     const hasStir = /\bstir\b/.test(L);
-    const hasT1 = /\bt1\b/.test(L);
+    const hasT1   = /\bt1\b/.test(L);
+    // T2-equivalent axial sequences (MEDIC = Siemens GRE used in cspine, GRE, T2*)
+    const hasT2eq = /\bmedic\b/.test(L) || /\bgre\b/.test(L) || /\bt2star\b/.test(L) || /t2\*/.test(seriesLabel || '');
     if (hasSag && hasT2) return 0;
-    if (hasAx && hasT2) return 1;
+    if (hasAx && (hasT2 || hasT2eq)) return 1;
     if (hasSag && hasStir) return 2;
     if (hasSag && hasT1) return 3;
+    if (hasAx) return 4;  // generic axial fallback (e.g. unknown sequence names)
     return 9;
   }
 
@@ -1160,6 +1225,7 @@
     document.getElementById('compareView').classList.add('open');
     renderCompareChips();
     renderCompareImages();
+    pushCastState(true);
   }
 
   function exitCompareMode() {
@@ -1169,6 +1235,7 @@
     document.getElementById('studyBar').style.display = 'flex';
     document.querySelectorAll('.nav-overlay').forEach(el => el.style.display = '');
     showSingleView();
+    pushCastState(true);
   }
 
   // ── Snapshot mode ──
@@ -1188,6 +1255,7 @@
     document.querySelectorAll('.nav-overlay').forEach(el => el.style.display = 'none');
     document.getElementById('snapshotView').style.display = 'flex';
     renderSnapshotView();
+    pushCastState(true);
   }
 
   function exitSnapshotMode() {
@@ -1196,17 +1264,20 @@
     document.getElementById('snapshotView').style.display = 'none';
     document.querySelectorAll('.nav-overlay').forEach(el => el.style.display = '');
     showSingleView();
+    pushCastState(true);
   }
 
   // Pick up to 3 series for the snapshot MRI half.
-  // Slot 1: Sag T2  Slot 2: Ax T2 Stack (preferred) or any Ax T2
+  // Slot 1: Sag T2  Slot 2: Ax T2/T2-equiv (preferred) or any axial
   // Slot 3: Ax T2 Multi (when Stack fills slot 2) OR Sag STIR otherwise
   function pickSnapshotSeries(seriesList) {
     const sagT2    = seriesList.find(s => s.orderRank === 0);
     const allAxT2  = seriesList.filter(s => s.orderRank === 1);
     const sagStir  = seriesList.find(s => s.orderRank === 2);
-    const axStack  = allAxT2.find(s => /stack/i.test(s.seriesLabel));
-    const axMulti  = allAxT2.find(s => /multi/i.test(s.seriesLabel));
+    // Fall back to generic axial (rank 4, e.g. AX MEDIC) if no rank-1 axial found
+    const allAx    = allAxT2.length > 0 ? allAxT2 : seriesList.filter(s => s.orderRank === 4);
+    const axStack  = allAx.find(s => /stack/i.test(s.seriesLabel));
+    const axMulti  = allAx.find(s => /multi/i.test(s.seriesLabel));
 
     const result = [];
     if (sagT2) result.push(sagT2);
@@ -1214,7 +1285,7 @@
       result.push(axStack);
       result.push(axMulti);
     } else {
-      const axPrimary = axStack || axMulti || allAxT2[0] || null;
+      const axPrimary = axStack || axMulti || allAx[0] || null;
       if (axPrimary) result.push(axPrimary);
       if (sagStir) result.push(sagStir);
     }
@@ -1311,12 +1382,14 @@
     compareTopStudyKey = studyKey;
     renderCompareChips();
     renderCompareImages();
+    pushCastState(true);
   }
 
   function setCompareBottom(studyKey) {
     compareBottomStudyKey = studyKey;
     renderCompareChips();
     renderCompareImages();
+    pushCastState(true);
   }
 
   function renderCompareChips() {
@@ -1395,6 +1468,7 @@
     viewMode = 'row';
     activeStudyKey = studyKey;
     highlightStudyBtn(studyKey);
+    pushCastState(true);
 
     // Hide single-image nav overlays — they sit at z-index 5, position:absolute,
     // covering the left/right 70px and would block the MRI pagination buttons.
@@ -1880,6 +1954,7 @@
     showSingleView();
     currentIndex = 0;
     applyRegionFilter();
+    pushCastState(true);
   }
 
   function studyMatchesRegion(studyDesc, region) {
@@ -2004,13 +2079,18 @@
 
   function buildCastState() {
     if (!snapshotPatientKey) return null;
-    return {
+    const state = {
       patientKey: snapshotPatientKey,
       studyKey:   activeStudyKey || null,
       imgIndex:   currentIndex,
       viewMode,
       region:     activeRegion,
     };
+    if (viewMode === 'compare') {
+      state.compareTop = compareTopStudyKey;
+      state.compareBottom = compareBottomStudyKey;
+    }
+    return state;
   }
 
   function pushCastState(immediate = false) {

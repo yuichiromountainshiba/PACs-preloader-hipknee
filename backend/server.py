@@ -14,6 +14,7 @@ import json
 import re
 import uuid
 import subprocess
+import asyncio
 from pathlib import Path
 from datetime import datetime
 
@@ -84,6 +85,19 @@ def save_index(index):
     get_index_path().write_text(json.dumps(index, indent=2))
 
 
+# ── In-memory index cache ──
+_index_cache: dict = None   # in-memory index; None until first image arrives
+_index_lock = asyncio.Lock()  # serialises concurrent receive_image calls
+_dirty_count = 0
+FLUSH_EVERY = 10            # write to disk every N images
+
+def _get_cached_index() -> dict:
+    global _index_cache
+    if _index_cache is None:
+        _index_cache = load_index()
+    return _index_cache
+
+
 # ── API Endpoints ──
 
 @app.get("/api/health")
@@ -145,25 +159,38 @@ async def register_patient(
     patient_name: str = Form(...),
     patient_dob: str = Form(""),
     clinic_date: str = Form(""),
+    clinic_time: str = Form(""),
     provider: str = Form(""),
 ):
     """Register a patient with no images yet (placeholder for pending preload)."""
-    index = load_index()
+    global _dirty_count
+    index = _get_cached_index()
     patient_key = sanitize_filename(f"{patient_name}_{patient_dob}")
     if patient_key not in index["patients"]:
         index["patients"][patient_key] = {
             "name": patient_name,
             "dob": patient_dob,
             "clinic_date": clinic_date,
+            "clinic_time": clinic_time,
             "provider": provider,
             "studies": {},
             "image_count": 0,
             "created_at": datetime.now().isoformat(),
         }
         save_index(index)
-    elif provider and not index["patients"][patient_key].get("provider"):
-        index["patients"][patient_key]["provider"] = provider
-        save_index(index)
+        _dirty_count = 0
+    else:
+        dirty = False
+        pt = index["patients"][patient_key]
+        if provider and not pt.get("provider"):
+            pt["provider"] = provider
+            dirty = True
+        if clinic_time:
+            pt["clinic_time"] = clinic_time
+            dirty = True
+        if dirty:
+            save_index(index)
+            _dirty_count = 0
     return {"status": "registered", "key": patient_key}
 
 
@@ -177,6 +204,7 @@ async def receive_image(
     study_date: str = Form(""),
     image_index: str = Form("0"),
     clinic_date: str = Form(""),
+    clinic_time: str = Form(""),
     image_uid: str = Form(""),
     slice_location: str = Form(""),
     image_position: str = Form(""),
@@ -189,7 +217,21 @@ async def receive_image(
     """Receive an image from the Chrome extension and store it locally."""
 
     # Update index
-    index = load_index()
+    async with _index_lock:
+        return await _receive_image_locked(
+            image, patient_name, patient_dob, study_uid, study_description,
+            study_date, image_index, clinic_date, clinic_time, image_uid, slice_location,
+            image_position, image_orientation, rows, cols, pixel_spacing, provider,
+        )
+
+
+async def _receive_image_locked(
+    image, patient_name, patient_dob, study_uid, study_description,
+    study_date, image_index, clinic_date, clinic_time, image_uid, slice_location,
+    image_position, image_orientation, rows, cols, pixel_spacing, provider,
+):
+    global _dirty_count
+    index = _get_cached_index()
     # Create / update patient
     patient_key = sanitize_filename(f"{patient_name}_{patient_dob}")
     patient_dir = IMAGES_DIR / patient_key
@@ -199,16 +241,20 @@ async def receive_image(
             "name": patient_name,
             "dob": patient_dob,
             "clinic_date": clinic_date,
+            "clinic_time": clinic_time,
             "provider": provider,
             "studies": {},
             "image_count": 0,
             "created_at": datetime.now().isoformat(),
         }
     else:
-        if clinic_date and not index["patients"][patient_key].get("clinic_date"):
-            index["patients"][patient_key]["clinic_date"] = clinic_date
-        if provider and not index["patients"][patient_key].get("provider"):
-            index["patients"][patient_key]["provider"] = provider
+        pt = index["patients"][patient_key]
+        if clinic_date and not pt.get("clinic_date"):
+            pt["clinic_date"] = clinic_date
+        if clinic_time:
+            pt["clinic_time"] = clinic_time
+        if provider and not pt.get("provider"):
+            pt["provider"] = provider
 
     patient = index["patients"][patient_key]
     # Use study UID when available; fall back to description+date so studies from
@@ -274,15 +320,29 @@ async def receive_image(
         len(s["images"]) for s in patient["studies"].values()
     )
 
-    save_index(index)
+    _dirty_count += 1
+    if _dirty_count >= FLUSH_EVERY:
+        save_index(index)
+        _dirty_count = 0
 
     return {"status": "saved", "filename": filename, "patient": patient_key}
+
+
+@app.post("/api/flush-index")
+async def flush_index_endpoint():
+    """Flush buffered index changes to disk (called by extension after each patient)."""
+    global _dirty_count
+    async with _index_lock:
+        if _index_cache is not None and _dirty_count > 0:
+            save_index(_index_cache)
+            _dirty_count = 0
+    return {"status": "ok"}
 
 
 @app.get("/api/patients")
 def list_patients():
     """List all preloaded patients."""
-    index = load_index()
+    index = _index_cache if _index_cache is not None else load_index()
     patients = []
     for key, data in index["patients"].items():
         patients.append({
@@ -290,6 +350,7 @@ def list_patients():
             "name": data["name"],
             "dob": data["dob"],
             "clinic_date": data.get("clinic_date", ""),
+            "clinic_time": data.get("clinic_time", ""),
             "provider": data.get("provider", ""),
             "image_count": data["image_count"],
             "study_count": len(data["studies"]),
@@ -303,7 +364,7 @@ def list_patients():
 @app.get("/api/patients/{patient_key}")
 def get_patient(patient_key: str):
     """Get details and image list for a patient."""
-    index = load_index()
+    index = _index_cache if _index_cache is not None else load_index()
     if patient_key not in index["patients"]:
         raise HTTPException(status_code=404, detail="Patient not found")
 
@@ -312,9 +373,26 @@ def get_patient(patient_key: str):
         "name": patient["name"],
         "dob": patient["dob"],
         "clinic_date": patient.get("clinic_date", ""),
+        "clinic_time": patient.get("clinic_time", ""),
         "provider": patient.get("provider", ""),
         "studies": patient["studies"],
     }
+
+
+@app.patch("/api/patients/{patient_key}")
+async def update_patient(patient_key: str, request: Request):
+    """Update mutable patient fields (currently: name). Key stays the same."""
+    body = await request.json()
+    index = _get_cached_index()
+    if patient_key not in index["patients"]:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    pt = index["patients"][patient_key]
+    if "name" in body:
+        new_name = str(body["name"]).strip()
+        if new_name:
+            pt["name"] = new_name
+    save_index(index)
+    return {"status": "updated", "key": patient_key}
 
 
 @app.get("/api/images/{patient_key}/{filename}")
@@ -330,27 +408,31 @@ def serve_image(patient_key: str, filename: str):
 @app.post("/api/patients/{patient_key}/request-refresh")
 def request_refresh(patient_key: str):
     """Queue a refresh request for a patient."""
-    index = load_index()
+    global _dirty_count
+    index = _get_cached_index()
     if patient_key not in index["patients"]:
         raise HTTPException(status_code=404, detail="Patient not found")
     index["pending_refreshes"][patient_key] = datetime.utcnow().isoformat()
     save_index(index)
+    _dirty_count = 0
     return {"status": "queued"}
 
 
 @app.get("/api/pending_refreshes")
 def get_pending_refreshes():
     """Return all pending refresh requests (polled by the extension)."""
-    index = load_index()
+    index = _index_cache if _index_cache is not None else load_index()
     return {"pending": index.get("pending_refreshes", {})}
 
 
 @app.delete("/api/pending_refreshes/{patient_key}")
 def clear_refresh(patient_key: str):
     """Clear a fulfilled refresh request."""
-    index = load_index()
+    global _dirty_count
+    index = _get_cached_index()
     index.get("pending_refreshes", {}).pop(patient_key, None)
     save_index(index)
+    _dirty_count = 0
     return {"status": "cleared"}
 
 
@@ -1078,11 +1160,14 @@ function render(data) {
 @app.delete("/api/clear")
 def clear_all():
     """Clear all cached data."""
+    global _index_cache, _dirty_count
     import shutil
     if IMAGES_DIR.exists():
         shutil.rmtree(IMAGES_DIR)
     IMAGES_DIR.mkdir(parents=True, exist_ok=True)
-    save_index({"patients": {}, "updated": None})
+    _index_cache = {"patients": {}, "pending_refreshes": {}, "updated": None}
+    save_index(_index_cache)
+    _dirty_count = 0
     return {"status": "cleared"}
 
 
