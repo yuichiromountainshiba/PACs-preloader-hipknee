@@ -1686,7 +1686,7 @@
     // Detect orientation from label text
     const labelText = labelTextEl ? labelTextEl.textContent : '';
     const isSag = /\bsag\b/i.test(labelText);
-    const isAx  = /\bax\b/i.test(labelText);
+    const isAx  = /\bax/i.test(labelText);
 
     // Compute physical image extent for accurate cross-reference line placement.
     // SAG: the line on SAG from an AX slice must land at the correct fraction of SAG's

@@ -5,14 +5,18 @@ let isPreloading = false;
 let pacsTabId = null;
 let scheduledPatients = [];
 const refreshesInProgress = new Set();
+// Tracks patients whose pre-visit auto-refresh has already been queued this session
+const visitAutoQueued = new Set();
 
 chrome.runtime.onInstalled.addListener(() => {
   console.log('[PACS Preloader] Extension installed');
   chrome.alarms.create('pollRefreshes', { periodInMinutes: 10 / 60 }); // every 10s
+  chrome.alarms.create('checkVisitTimes', { periodInMinutes: 1 });    // every 1 min
 });
 
 chrome.alarms.onAlarm.addListener(alarm => {
   if (alarm.name === 'pollRefreshes') pollPendingRefreshes();
+  if (alarm.name === 'checkVisitTimes') checkVisitTimes().catch(console.error);
 });
 
 // ── Message listener (from popup) ──
@@ -53,6 +57,8 @@ async function runPreload({ patients, serverUrl, clinicDate, filters, tabId }) {
     } catch (err) {
       postToPopup({ action: 'preloadLog', text: `  ✗ Error: ${err.message}`, cls: 'error' });
     }
+    // Ensure clinic_time is stored even if images were found (images path bypasses register)
+    if (pt.visitTime) await setPatientClinicTime(pt, serverUrl);
     await sleep(500);
   }
 
@@ -85,28 +91,42 @@ async function preloadPatient(pt, serverUrl, clinicDate, filters) {
   postToPopup({ action: 'preloadLog', text: `  Found ${result.studies.length} study(ies)`, cls: 'success' });
   let count = 0;
 
+  // Log all studies upfront before parallel execution
   for (const study of result.studies) {
-    postToPopup({ action: 'preloadLog', text: `  ${study.description || 'Unknown study'}`, cls: 'info' });
     if (!study.series || study.series.length === 0) {
-      postToPopup({ action: 'preloadLog', text: `    No series found`, cls: 'error' });
+      postToPopup({ action: 'preloadLog', text: `  ${study.description || 'Unknown study'} — no series`, cls: 'error' });
+    } else {
+      postToPopup({ action: 'preloadLog', text: `  ${study.description || 'Unknown study'}`, cls: 'info' });
+    }
+  }
+
+  const eligibleStudies = result.studies.filter(s => s.series && s.series.length > 0);
+  const sentResults = await Promise.all(
+    eligibleStudies.map(study =>
+      sendToContentScript('batchPreloadStudy', {
+        studyUid:         study.studyUid,
+        series:           study.series,
+        patient:          { name: pt.name, dob: pt.dob, provider: pt.provider || '' },
+        studyDescription: study.description || '',
+        studyDate:        study.studyDate || '',
+        serverUrl,
+        clinicDate,
+      }).catch(e => ({ error: e.message, count: 0 }))
+    )
+  );
+
+  for (const [i, sent] of sentResults.entries()) {
+    const study = eligibleStudies[i];
+    if (sent.error) {
+      postToPopup({ action: 'preloadLog', text: `    ✗ ${study.description}: ${sent.error}`, cls: 'error' });
       continue;
     }
-
-    const sent = await sendToContentScript('batchPreloadStudy', {
-      studyUid:         study.studyUid,
-      series:           study.series,
-      patient:          { name: pt.name, dob: pt.dob, provider: pt.provider || '' },
-      studyDescription: study.description || '',
-      studyDate:        study.studyDate || '',
-      serverUrl,
-      clinicDate,
-    });
-
-    if (sent.error) { postToPopup({ action: 'preloadLog', text: `    ✗ ${sent.error}`, cls: 'error' }); continue; }
-    count += sent.count || 0;
     if (sent.studyDate) postToPopup({ action: 'preloadLog', text: `    Study date: ${sent.studyDate}`, cls: 'info' });
-    postToPopup({ action: 'preloadLog', text: `    ✓ ${sent.count} image(s) from ${study.series.length} series`, cls: 'success' });
+    postToPopup({ action: 'preloadLog', text: `    ✓ ${sent.count} image(s) from ${study.series.length} series (${study.description})`, cls: 'success' });
+    count += sent.count || 0;
   }
+
+  await fetch(`${serverUrl}/api/flush-index`, { method: 'POST' }).catch(() => {});
   return count;
 }
 
@@ -116,7 +136,18 @@ async function registerPatientPlaceholder(pt, serverUrl, clinicDate) {
     form.append('patient_name', pt.name);
     form.append('patient_dob', pt.dob);
     form.append('clinic_date', clinicDate);
+    form.append('clinic_time', pt.visitTime || '');
     form.append('provider', pt.provider || '');
+    await fetch(`${serverUrl}/api/patients/register`, { method: 'POST', body: form });
+  } catch (e) { /* non-critical */ }
+}
+
+async function setPatientClinicTime(pt, serverUrl) {
+  try {
+    const form = new FormData();
+    form.append('patient_name', pt.name);
+    form.append('patient_dob', pt.dob);
+    form.append('clinic_time', pt.visitTime || '');
     await fetch(`${serverUrl}/api/patients/register`, { method: 'POST', body: form });
   } catch (e) { /* non-critical */ }
 }
@@ -234,4 +265,50 @@ function _sendTabMessage(tabId, action, data) {
 
 function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
+}
+
+
+// ── Pre-visit Auto-refresh ──
+// Queues a refresh for any patient whose clinic visit is within the next 5 minutes.
+async function checkVisitTimes() {
+  const saved = await chrome.storage.local.get(['serverUrl']);
+  const serverUrl = (saved.serverUrl || 'http://localhost:8888').replace(/\/$/, '');
+
+  let data;
+  try {
+    const resp = await fetch(`${serverUrl}/api/patients`);
+    if (!resp.ok) return;
+    data = await resp.json();
+  } catch (e) { return; }
+
+  const now = new Date();
+  for (const p of (data.patients || [])) {
+    if (!p.clinic_time || visitAutoQueued.has(p.key)) continue;
+    const visitDate = parseClinicTime(p.clinic_time);
+    if (!visitDate) continue;
+
+    const diffMs = visitDate - now;
+    // Queue if visit is 0–6 minutes away (catches the 1-min poll window before the 5-min mark)
+    if (diffMs >= 0 && diffMs <= 6 * 60 * 1000) {
+      visitAutoQueued.add(p.key);
+      console.log(`[VisitTime] Auto-refresh for ${p.name} — visit at ${p.clinic_time}`);
+      postToPopup({ action: 'preloadLog', text: `Auto-refresh: ${p.name} visits at ${p.clinic_time}`, cls: 'info' });
+      try {
+        await fetch(`${serverUrl}/api/patients/${encodeURIComponent(p.key)}/request-refresh`, { method: 'POST' });
+      } catch (e) { console.error('[VisitTime] queue error:', e.message); }
+    }
+  }
+}
+
+function parseClinicTime(timeStr) {
+  const m = timeStr.match(/(\d{1,2}):(\d{2})\s*([AP]M)/i);
+  if (!m) return null;
+  let h = parseInt(m[1], 10);
+  const min = parseInt(m[2], 10);
+  const ampm = m[3].toUpperCase();
+  if (ampm === 'PM' && h !== 12) h += 12;
+  if (ampm === 'AM' && h === 12) h = 0;
+  const d = new Date();
+  d.setHours(h, min, 0, 0);
+  return d;
 }
