@@ -222,6 +222,7 @@ function parseStudyTable() {
     date: headerCells.indexOf('Study Date'),
     mod:  headerCells.indexOf('Mod'),
     name: headerCells.indexOf('Patient Name'),
+    dob:  headerCells.indexOf('DOB'),
   };
 
   const results = [];
@@ -251,6 +252,7 @@ function parseStudyTable() {
       studyDate,
       modality:    col.mod  >= 0 ? (cells[col.mod]?.textContent.trim()  || '') : '',
       patientName: col.name >= 0 ? (cells[col.name]?.textContent.trim() || '') : '',
+      patientDob:  col.dob  >= 0 ? (cells[col.dob]?.textContent.trim()  || '') : '',
       row,
     });
   }
@@ -425,7 +427,7 @@ async function searchPatientDOM(name, dob, debug = false) {
       description: sr.description,
       studyDate:   sr.studyDate,
       patientName: sr.patientName || name.toUpperCase(),
-      patientDob:  dob ? (normalizeDob(dob) || '') : '',
+      patientDob:  sr.patientDob ? (normalizeDob(sr.patientDob) || '') : '',
       modality:    sr.modality,
       series:      seriesRows,
     });
@@ -460,6 +462,8 @@ async function searchPatientDOM(name, dob, debug = false) {
 function normalizeDob(dob) {
   const m = dob.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
   if (m) return `${m[3]}${m[1].padStart(2,'0')}${m[2].padStart(2,'0')}`;
+  const iso = dob.match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[1]}${iso[2]}${iso[3]}`;
   if (/^\d{8}$/.test(dob)) return dob;
   return null;
 }
