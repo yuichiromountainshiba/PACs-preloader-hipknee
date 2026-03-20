@@ -543,7 +543,7 @@ async function pLimit(tasks, concurrency) {
  *
  * Called via the 'batchPreloadStudy' message from popup.js.
  */
-async function batchPreloadStudy({ studyUid, series, patient, studyDescription, studyDate, serverUrl, clinicDate }) {
+async function batchPreloadStudy({ studyUid, series, patient, studyDescription, studyDate, modality, serverUrl, clinicDate }) {
   let resolvedStudyDate = studyDate || '';
 
   // ── Step 1: ViewPatInfo for all series, 3 at a time ──
@@ -556,7 +556,7 @@ async function batchPreloadStudy({ studyUid, series, patient, studyDescription, 
   const seriesResults = await pLimit(viewTasks, 3);
 
   // ── Step 1b: Fetch DICOM slice metadata in parallel for MRI/CT series ──
-  const isMriOrCt = /^(MR|MRI|CT)[\s\-]/i.test(studyDescription);
+  const isMriOrCt = modality ? /^(MR|MRI|CT)$/i.test(modality) : /^(MR|MRI|CT)[\s\-]/i.test(studyDescription);
   const metadataMap = {};  // imageUrl → { sliceLocation, imagePosition }
   if (isMriOrCt) {
     const allMetaFetches = [];
@@ -599,6 +599,7 @@ async function batchPreloadStudy({ studyUid, series, patient, studyDescription, 
           fd.append('dicom_study_uid',   studyUid);
           fd.append('study_description', desc.trim());
           fd.append('study_date',        sDate);
+          fd.append('modality',          modality || '');
           fd.append('image_index',       String(i));
           fd.append('clinic_date',       clinicDate || '');
           fd.append('image_uid',         imageUid);

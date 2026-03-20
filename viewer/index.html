@@ -991,9 +991,10 @@
 
       for (const [studyKey, study] of Object.entries(data.studies)) {
         const desc = study.description || studyKey;
-        allStudies.push({ description: desc, date: study.date || '', key: studyKey });
-        const isMri = isMriStudy(desc);
-        const isCt  = isCtStudy(desc);
+        const mod  = study.modality || '';
+        allStudies.push({ description: desc, date: study.date || '', key: studyKey, modality: mod });
+        const isMri = isMriStudy(desc, mod);
+        const isCt  = isCtStudy(desc, mod);
         const sortedImages = [...(study.images || [])].sort((a, b) => {
           if (isMri || isCt) {
             const pa = parseSeriesFromFilename(a.filename), pb = parseSeriesFromFilename(b.filename);
@@ -1099,12 +1100,14 @@
   }
 
   // MRI: study description starts with MR/MRI
-  function isMriStudy(studyDescription) {
+  function isMriStudy(studyDescription, modality) {
+    if (modality) return /^MRI?$/i.test(modality);
     return /^(MR|MRI)[\s\-]/i.test(studyDescription || '');
   }
 
   // CT: study description starts with CT
-  function isCtStudy(studyDescription) {
+  function isCtStudy(studyDescription, modality) {
+    if (modality) return /^CT$/i.test(modality);
     return /^CT[\s\-]/i.test(studyDescription || '');
   }
 
@@ -1297,7 +1300,7 @@
 
     // Find most recent XR study matching activeRegion
     const xrStudies = allStudies.filter(s =>
-      (isXrStudy(s.description) || (!isMriStudy(s.description) && !isCtStudy(s.description))) &&
+      (isXrStudy(s.description) || (!isMriStudy(s.description, s.modality) && !isCtStudy(s.description, s.modality))) &&
       studyMatchesRegion(s.description, activeRegion)
     ).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
     const xrStudy = xrStudies[0] || null;
@@ -1310,7 +1313,7 @@
 
     // Find most recent MRI study matching activeRegion
     const mriStudies = allStudies.filter(s =>
-      isMriStudy(s.description) && studyMatchesRegion(s.description, activeRegion)
+      isMriStudy(s.description, s.modality) && studyMatchesRegion(s.description, activeRegion)
     ).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
     const mriStudy = mriStudies[0] || null;
 
@@ -1419,9 +1422,10 @@
     const bottomEl = document.getElementById('compareBottomImages');
 
     function renderCompareHalf(el, studyKey, studyDesc, imgs, arrayName) {
-      const isSeriesStudy = (isMriStudy(studyDesc) || isCtStudy(studyDesc)) && studyKey;
+      const studyMod = allStudies.find(s => s.key === studyKey)?.modality || '';
+      const isSeriesStudy = (isMriStudy(studyDesc, studyMod) || isCtStudy(studyDesc, studyMod)) && studyKey;
       if (isSeriesStudy) {
-        const seriesList = isMriStudy(studyDesc) ? getMriSeriesForStudy(studyKey) : getCtSeriesForStudy(studyKey);
+        const seriesList = isMriStudy(studyDesc, studyMod) ? getMriSeriesForStudy(studyKey) : getCtSeriesForStudy(studyKey);
         if (seriesList.length === 0) {
           el.classList.remove('mri-half');
           el.innerHTML = imgs.map((img, i) =>
@@ -1476,11 +1480,12 @@
 
     const studyObj = allStudies.find(s => s.key === studyKey);
     const studyDesc = studyObj ? studyObj.description : studyKey;
+    const studyMod  = studyObj ? (studyObj.modality || '') : '';
     const imgs = allImages.filter(img => img.studyKey === studyKey);
     const rowView = document.getElementById('rowView');
 
-    if (isMriStudy(studyDesc) || isCtStudy(studyDesc)) {
-      const seriesList = isMriStudy(studyDesc) ? getMriSeriesForStudy(studyKey) : getCtSeriesForStudy(studyKey);
+    if (isMriStudy(studyDesc, studyMod) || isCtStudy(studyDesc, studyMod)) {
+      const seriesList = isMriStudy(studyDesc, studyMod) ? getMriSeriesForStudy(studyKey) : getCtSeriesForStudy(studyKey);
       if (seriesList.length === 0) {
         rowView.classList.remove('mri-view');
         rowView.innerHTML = imgs.map((img, i) => `
@@ -2192,7 +2197,11 @@
   }
 
   // ── Imaging Report ──
-  function studyModalityLabel(desc) {
+  function studyModalityLabel(desc, modality) {
+    if (modality) {
+      if (/^MRI?$/i.test(modality)) return 'MRI';
+      if (/^CT$/i.test(modality)) return 'CT';
+    }
     if (/^(MR|MRI)[\s\-]/i.test(desc)) return 'MRI';
     if (/^CT[\s\-]/i.test(desc)) return 'CT';
     return 'XR';
@@ -2240,7 +2249,7 @@
           html += `<div class="report-no-studies">No spine studies loaded</div>`;
         } else {
           for (const s of studyList) {
-            const mod = studyModalityLabel(s.description || '');
+            const mod = studyModalityLabel(s.description || '', s.modality || '');
             const modClass = mod.toLowerCase();
             const dateStr = s.date ? formatStudyDate(s.date) : '—';
             const imgCount = (s.images || []).length;

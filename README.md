@@ -127,7 +127,7 @@ python nightly_loader.py                     # full run: Selenium PACS login →
 **Nightly flow (fully automated):**
 1. **9 PM Mon-Fri:** Task Scheduler runs `run_nightly.bat` → starts server → opens Chrome with extension → logs into PACS via CDP JavaScript → launches Epic → logs in via pyautogui → captures next day's schedule → OCR → imports patients → extension auto-preloads overnight
 2. **7 AM Tue-Sat:** `send_summary.bat` emails HIPAA-safe summary (initials only)
-3. **During clinic:** Extension auto-refreshes XRs 1-5 minutes before each appointment
+3. **During clinic:** Extension auto-refreshes **today's new X-rays only** 1–5 minutes before each appointment (XR-only for speed — MRI/CT are not re-fetched)
 
 Schedule via Windows Task Scheduler (no admin needed):
 ```bash

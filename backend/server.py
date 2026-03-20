@@ -269,6 +269,7 @@ async def receive_image(
     cols: str = Form(""),
     pixel_spacing: str = Form(""),
     provider: str = Form(""),
+    modality: str = Form(""),
 ):
     """Receive an image from the Chrome extension and store it locally."""
 
@@ -277,14 +278,14 @@ async def receive_image(
         return await _receive_image_locked(
             image, patient_name, patient_dob, study_uid, study_description,
             study_date, image_index, clinic_date, clinic_time, image_uid, slice_location,
-            image_position, image_orientation, rows, cols, pixel_spacing, provider,
+            image_position, image_orientation, rows, cols, pixel_spacing, provider, modality,
         )
 
 
 async def _receive_image_locked(
     image, patient_name, patient_dob, study_uid, study_description,
     study_date, image_index, clinic_date, clinic_time, image_uid, slice_location,
-    image_position, image_orientation, rows, cols, pixel_spacing, provider,
+    image_position, image_orientation, rows, cols, pixel_spacing, provider, modality="",
 ):
     global _dirty_count
     index = _get_cached_index()
@@ -325,8 +326,11 @@ async def _receive_image_locked(
             "uid": study_uid,
             "description": study_description,
             "date": study_date,
+            "modality": modality,
             "images": [],
         }
+    elif modality and not patient["studies"][study_key].get("modality"):
+        patient["studies"][study_key]["modality"] = modality
 
     study = patient["studies"][study_key]
 

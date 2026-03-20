@@ -111,6 +111,7 @@ async function preloadPatient(pt, serverUrl, clinicDate, filters) {
         patient:          { name: pt.name, dob: pt.dob, provider: pt.provider || '' },
         studyDescription: study.description || '',
         studyDate:        study.studyDate || '',
+        modality:         study.modality || '',
         serverUrl,
         clinicDate,
       }).catch(e => ({ error: e.message, count: 0 }))

@@ -7,3 +7,6 @@ pdfplumber
 keyring
 pytesseract
 websocket-client
+fastapi
+uvicorn
+python-multipart
