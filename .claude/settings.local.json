@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/Users/dsing/python//**)",
+      "Bash(ls /c/Python*)",
+      "Bash(/c/Users/dsing/python/python.exe /c/Users/dsing/python/get-pip.py 2>&1)",
+      "Bash(/c/Users/dsing/python/python.exe -m pip install -r automation/requirements.txt 2>&1)",
+      "Bash(/c/Users/dsing/python/Scripts/pip.exe install:*)",
+      "Read(//c/Users/dsing/**)",
+      "Bash(powershell -Command \"Compress-Archive -Path ''tools'' -DestinationPath ''tools.zip'' -Force\")",
+      "Bash(wait:*)",
+      "Bash(python3 -c \":*)",
+      "Bash(/c/Users/dsing/python/python.exe -c \":*)",
+      "Bash(/c/Users/dsing/python/python.exe -c \"\nimport json\nfrom collections import Counter\n\nwith open\\('pacs_data/index.json'\\) as f:\n    data = json.load\\(f\\)\n\npatient = data['patients']['Mead_Dennis_K_7231951']\nmri_study = patient['studies']['1.3.12.2.1107.5.2.18.142220.30000025081906250458700000019']\nimages = mri_study['images']\nprint\\('Total images:', len\\(images\\)\\)\nprint\\(\\)\n\nseries_names = []\nfor img in images:\n    fname = img['path'].replace\\('\\\\\\\\\\\\\\\\', '/'\\).replace\\('\\\\\\\\\\\\\\\\', '/'\\).split\\('/'\\)[-1]\n    parts = fname.rsplit\\('_', 2\\)\n    series = parts[0] if len\\(parts\\) >= 3 else fname\n    series_names.append\\(series\\)\n\ncounts = Counter\\(series_names\\)\nfor series, count in sorted\\(counts.items\\(\\)\\):\n    print\\(series + ': ' + str\\(count\\) + ' images'\\)\n\" 2>&1)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(cp:*)"
+    ]
+  }
+}
