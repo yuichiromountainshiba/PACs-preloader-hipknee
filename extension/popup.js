@@ -47,10 +47,18 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Load saved settings
   const saved = await chrome.storage.local.get(STORAGE_KEYS);
   if (saved.schedule)   $('#schedule').value = saved.schedule;
-  if (saved.serverUrl)  $('#serverUrl').value = saved.serverUrl;
-  else                  $('#serverUrl').value = SUBSPECIALTY.defaultServerUrl;
+  // Use stored URL only if it belongs to this subspecialty (same localhost port).
+  // A stale localhost URL from a different subspecialty gets reset to our default.
+  const _storedUrl  = saved.serverUrl || '';
+  const _defaultUrl = SUBSPECIALTY.defaultServerUrl;
+  const _useStored  = _storedUrl && !(
+    _storedUrl.startsWith('http://localhost:') &&
+    _defaultUrl.startsWith('http://localhost:') &&
+    _storedUrl !== _defaultUrl
+  );
+  $('#serverUrl').value = _useStored ? _storedUrl : _defaultUrl;
+  if (!_useStored) chrome.storage.local.set({ serverUrl: _defaultUrl });
   if (saved.clinicDate) $('#clinicDate').value = saved.clinicDate;
-  if (!saved.serverUrl) chrome.storage.local.set({ serverUrl: $('#serverUrl').value });
   for (const id of FILTER_KEYS) {
     if (saved[id] != null) $(`#${id}`).checked = saved[id];
   }

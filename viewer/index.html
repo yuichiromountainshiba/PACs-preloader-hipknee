@@ -476,7 +476,7 @@
         <p>No preloaded images yet.<br>Use the Chrome extension to preload.</p>
       </div>
     </div>
-    <div style="padding:8px 10px; border-top:1px solid #1e293b;">
+    <div style="padding:6px 10px; border-top:1px solid #1e293b;">
       <button onclick="openFeedbackModal()" style="width:100%; background:#1e293b; border:1px solid #334155; border-radius:6px; color:#64748b; font-size:11px; padding:6px 10px; cursor:pointer; text-align:left;">
         💬 Report a bug or suggestion
       </button>
@@ -515,19 +515,13 @@
         </div>
       </div>
       <div class="study-bar" id="studyBar" style="display:none;"></div>
-      <div class="cast-bar" id="castBar" style="display:none;">
-        <span class="cast-bar-label">Cast to:</span>
-        <button class="filter-btn cast-btn" id="castRoom1" onclick="setCastRoom('room1')" ondblclick="renameCastRoom(event,'room1')">Room 1</button><a class="cast-open-link" href="/cast/room1" target="_blank" title="Open cast display">↗</a>
-        <button class="filter-btn cast-btn" id="castRoom2" onclick="setCastRoom('room2')" ondblclick="renameCastRoom(event,'room2')">Room 2</button><a class="cast-open-link" href="/cast/room2" target="_blank" title="Open cast display">↗</a>
-        <button class="filter-btn cast-btn" id="castRoom3" onclick="setCastRoom('room3')" ondblclick="renameCastRoom(event,'room3')">Room 3</button><a class="cast-open-link" href="/cast/room3" target="_blank" title="Open cast display">↗</a>
-      </div>
+      <div id="castBar" style="display:none;"></div>
       <div class="filter-bar" id="filterBar" style="display:none;">
-        <button class="filter-btn active" data-region="all"      onclick="setRegionFilter('all')">All</button>
-        <button class="filter-btn"        data-region="lumbar"   onclick="setRegionFilter('lumbar')">Lumbar</button>
-        <button class="filter-btn"        data-region="cervical" onclick="setRegionFilter('cervical')">Cervical</button>
-        <button class="filter-btn"        data-region="thoracic" onclick="setRegionFilter('thoracic')">Thoracic</button>
+        <button class="filter-btn active" data-region="all"       onclick="setRegionFilter('all')">All</button>
+        <button class="filter-btn"        data-region="hip"       onclick="setRegionFilter('hip')">Hip / Pelvis</button>
+        <button class="filter-btn"        data-region="knee"      onclick="setRegionFilter('knee')">Knee</button>
+        <button class="filter-btn"        data-region="alignment" onclick="setRegionFilter('alignment')">Long Leg</button>
         <button class="filter-btn compare-btn" id="compareBtn" onclick="toggleCompareMode()">Compare</button>
-        <button class="filter-btn snapshot-btn" id="snapshotBtn" onclick="toggleSnapshotMode()">Snapshot</button>
         <button class="filter-btn" id="bcBtn" onclick="toggleBC()" title="Brightness / Contrast">☀</button>
       </div>
       <div class="bc-bar" id="bcBar" style="display:none;">
@@ -625,7 +619,8 @@
   const _displayMode = _urlParams.has('displaymode');
   const _isHipKnee   = window.location.port === '8889' || _urlParams.get('specialty') === 'hipknee';
   if (_isHipKnee) {
-    document.getElementById('snapshotBtn').style.display = 'none';
+    const _snBtn = document.getElementById('snapshotBtn');
+    if (_snBtn) _snBtn.style.display = 'none';
   }
   if (_displayMode) {
     // Read-only room display — hide all controls
@@ -734,9 +729,14 @@
 
   // Region keywords
   const REGION_KW = {
-    lumbar:   ['lumbar', 'lumbosacral', 'l-spine', 'l1', 'l2', 'l3', 'l4', 'l5', 's1', 'sacrum', 'sacral', 'coccyx'],
-    cervical: ['cervical', 'c-spine', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7'],
-    thoracic: ['thoracic', 't-spine'],
+    hip:       ['hip', 'pelvis', 'femur', 'acetabulum', 'acetabular', 'sacroiliac', 'si joint',
+                'total hip', 'tha', 'hemiarthroplasty', 'hemi', 'femoral neck', 'intertrochanteric',
+                'subtrochanteric', 'hip arthroplasty', 'hip replacement', 'avascular necrosis', 'avn'],
+    knee:      ['knee', 'tibia', 'tibial', 'patella', 'patellar', 'total knee', 'tka', 'fibula',
+                'knee arthroplasty', 'knee replacement', 'unicompartmental', 'uka',
+                'distal femur', 'proximal tibia'],
+    alignment: ['long leg', 'standing long', 'scanogram', 'mechanical axis', 'eos',
+                'full length', 'hip to ankle', 'leg length'],
   };
 
   // Returns true if the study base matches more than one region (e.g. "XR LUMBAR CERVICAL SPINE")
@@ -2343,6 +2343,7 @@
   });
   setInterval(loadPatients, 5000);
   if (!_displayMode) loadRoomNames();
+
 
   // ── Feedback modal ──
   function openFeedbackModal() {
