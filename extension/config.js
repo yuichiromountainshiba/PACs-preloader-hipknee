@@ -7,7 +7,7 @@ const SUBSPECIALTY = {
   id:   'hipknee',
 
   defaultServerUrl: 'http://localhost:8889',
-  viewerParams:     '?specialty=hipknee',
+  viewerParams:     '',   // viewer auto-detects hip/knee mode from port 8889
 
   regionKeywords: {
     hip: [
