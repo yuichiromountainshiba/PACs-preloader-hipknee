@@ -36,6 +36,23 @@
     .fs-close .icon { width: 20px; height: 20px; }
     .fs-nav .icon { width: 28px; height: 28px; }
     .patient-list { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+    .sidebar-status {
+      padding: 7px 12px; border-top: 1px solid #1e293b;
+      font-size: 11px; display: flex; align-items: center; gap: 7px;
+      min-height: 32px; flex-shrink: 0;
+    }
+    .sidebar-status .ss-dot {
+      width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+    }
+    .sidebar-status.ss-pulling  { color: #38bdf8; }
+    .sidebar-status.ss-pulling  .ss-dot { background: #38bdf8; animation: ss-pulse 1s infinite; }
+    .sidebar-status.ss-queued   { color: #fbbf24; }
+    .sidebar-status.ss-queued   .ss-dot { background: #fbbf24; }
+    .sidebar-status.ss-complete { color: #34d399; }
+    .sidebar-status.ss-complete .ss-dot { background: #34d399; }
+    .sidebar-status.ss-idle     { color: #475569; }
+    .sidebar-status.ss-idle     .ss-dot { background: #334155; }
+    @keyframes ss-pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
     .patient-item { padding: 13px 16px; border-bottom: 1px solid #1e293b; cursor: pointer; transition: background 0.15s; }
     .patient-item.active, .patient-item:active { background: #1e3a5f; }
     .patient-name { font-size: 15px; font-weight: 500; color: #f1f5f9; }
@@ -299,6 +316,23 @@
     }
     .patient-refresh-btn:hover { color: #64748b; }
     .patient-edit-btn:hover { color: #64748b; }
+    /* ── Refresh dropdown ── */
+    .refresh-wrap { position: relative; flex-shrink: 0; margin-top: 2px; }
+    .refresh-menu {
+      display: none; position: absolute; right: 0; top: 100%; z-index: 30;
+      background: #1e293b; border: 1px solid #334155; border-radius: 6px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4); min-width: 180px; padding: 4px 0;
+      margin-top: 2px;
+    }
+    .refresh-menu.open { display: block; }
+    .refresh-menu-item {
+      display: block; width: 100%; background: none; border: none; color: #e2e8f0;
+      padding: 7px 12px; font-size: 12px; text-align: left; cursor: pointer;
+      line-height: 1.3;
+    }
+    .refresh-menu-item:hover { background: #334155; }
+    .refresh-menu-item .rm-label { display: block; font-weight: 500; }
+    .refresh-menu-item .rm-desc { display: block; font-size: 10px; color: #64748b; margin-top: 1px; }
     .patient-item.refresh-pending .patient-name::after { content: ' ↻'; display: inline-block; animation: spin 1s linear infinite; }
     @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
     .refresh-pending-age { color: #f59e0b; font-size: 10px; }
@@ -476,26 +510,9 @@
         <p>No preloaded images yet.<br>Use the Chrome extension to preload.</p>
       </div>
     </div>
-    <div style="padding:6px 10px; border-top:1px solid #1e293b;">
-      <button onclick="openFeedbackModal()" style="width:100%; background:#1e293b; border:1px solid #334155; border-radius:6px; color:#64748b; font-size:11px; padding:6px 10px; cursor:pointer; text-align:left;">
-        💬 Report a bug or suggestion
-      </button>
-    </div>
-  </div>
-
-  <!-- Feedback modal -->
-  <div id="feedbackOverlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:200; align-items:center; justify-content:center;">
-    <div style="background:#1e293b; border:1px solid #334155; border-radius:12px; padding:20px; width:340px; max-width:90vw;">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-        <span style="font-size:14px; font-weight:600; color:#e2e8f0;">Bug / Suggestion</span>
-        <button onclick="closeFeedbackModal()" style="background:none; border:none; color:#64748b; font-size:18px; cursor:pointer; padding:0 4px;">✕</button>
-      </div>
-      <textarea id="feedbackText" placeholder="Describe the bug or suggestion…" style="width:100%; height:100px; background:#0f172a; border:1px solid #334155; border-radius:6px; color:#e2e8f0; padding:8px; font-size:12px; resize:vertical; font-family:inherit;"></textarea>
-      <div style="display:flex; gap:8px; margin-top:10px;">
-        <button onclick="submitFeedback()" style="flex:1; background:#0ea5e9; border:none; border-radius:6px; color:white; font-size:13px; font-weight:600; padding:8px; cursor:pointer;">Send</button>
-        <button onclick="closeFeedbackModal()" style="flex:1; background:#0f172a; border:1px solid #334155; border-radius:6px; color:#64748b; font-size:13px; padding:8px; cursor:pointer;">Cancel</button>
-      </div>
-      <div id="feedbackStatus" style="font-size:11px; color:#34d399; margin-top:6px; min-height:14px;"></div>
+    <div class="sidebar-status ss-idle" id="sidebarStatus">
+      <div class="ss-dot"></div>
+      <span id="sidebarStatusText">—</span>
     </div>
   </div>
 
@@ -515,13 +532,19 @@
         </div>
       </div>
       <div class="study-bar" id="studyBar" style="display:none;"></div>
-      <div id="castBar" style="display:none;"></div>
+      <div class="cast-bar" id="castBar" style="display:none;">
+        <span class="cast-bar-label">Cast to:</span>
+        <button class="filter-btn cast-btn" id="castRoom1" onclick="setCastRoom('room1')" ondblclick="renameCastRoom(event,'room1')">Room 1</button><a class="cast-open-link" href="/cast/room1" target="_blank" title="Open cast display">↗</a>
+        <button class="filter-btn cast-btn" id="castRoom2" onclick="setCastRoom('room2')" ondblclick="renameCastRoom(event,'room2')">Room 2</button><a class="cast-open-link" href="/cast/room2" target="_blank" title="Open cast display">↗</a>
+        <button class="filter-btn cast-btn" id="castRoom3" onclick="setCastRoom('room3')" ondblclick="renameCastRoom(event,'room3')">Room 3</button><a class="cast-open-link" href="/cast/room3" target="_blank" title="Open cast display">↗</a>
+      </div>
       <div class="filter-bar" id="filterBar" style="display:none;">
         <button class="filter-btn active" data-region="all"       onclick="setRegionFilter('all')">All</button>
-        <button class="filter-btn"        data-region="hip"       onclick="setRegionFilter('hip')">Hip / Pelvis</button>
-        <button class="filter-btn"        data-region="knee"      onclick="setRegionFilter('knee')">Knee</button>
-        <button class="filter-btn"        data-region="alignment" onclick="setRegionFilter('alignment')">Long Leg</button>
+        <button class="filter-btn"        data-region="hip"      onclick="setRegionFilter('hip')">Hip / Pelvis</button>
+        <button class="filter-btn"        data-region="knee"     onclick="setRegionFilter('knee')">Knee</button>
+        <button class="filter-btn"        data-region="alignment" onclick="setRegionFilter('alignment')">Long Leg / EOS</button>
         <button class="filter-btn compare-btn" id="compareBtn" onclick="toggleCompareMode()">Compare</button>
+        <button class="filter-btn snapshot-btn" id="snapshotBtn" onclick="toggleSnapshotMode()">Snapshot</button>
         <button class="filter-btn" id="bcBtn" onclick="toggleBC()" title="Brightness / Contrast">☀</button>
       </div>
       <div class="bc-bar" id="bcBar" style="display:none;">
@@ -617,10 +640,10 @@
   const _urlParams   = new URLSearchParams(window.location.search);
   const _castPatient = _urlParams.get('patient');
   const _displayMode = _urlParams.has('displaymode');
-  const _isHipKnee   = window.location.port === '8889' || _urlParams.get('specialty') === 'hipknee';
+  const _isHipKnee   = _urlParams.get('specialty') === 'hipknee' || window.location.port === '8889';
   if (_isHipKnee) {
-    const _snBtn = document.getElementById('snapshotBtn');
-    if (_snBtn) _snBtn.style.display = 'none';
+    document.getElementById('snapshotBtn').style.display = 'none';
+    document.getElementById('castBar').style.display = 'none';
   }
   if (_displayMode) {
     // Read-only room display — hide all controls
@@ -729,14 +752,21 @@
 
   // Region keywords
   const REGION_KW = {
-    hip:       ['hip', 'pelvis', 'femur', 'acetabulum', 'acetabular', 'sacroiliac', 'si joint',
-                'total hip', 'tha', 'hemiarthroplasty', 'hemi', 'femoral neck', 'intertrochanteric',
-                'subtrochanteric', 'hip arthroplasty', 'hip replacement', 'avascular necrosis', 'avn'],
-    knee:      ['knee', 'tibia', 'tibial', 'patella', 'patellar', 'total knee', 'tka', 'fibula',
-                'knee arthroplasty', 'knee replacement', 'unicompartmental', 'uka',
-                'distal femur', 'proximal tibia'],
-    alignment: ['long leg', 'standing long', 'scanogram', 'mechanical axis', 'eos',
-                'full length', 'hip to ankle', 'leg length'],
+    hip: [
+      'hip', 'pelvis', 'femur', 'acetabulum', 'acetabular',
+      'sacroiliac', 'si joint', 'total hip', 'tha', 'hemiarthroplasty',
+      'hemi', 'femoral neck', 'intertrochanteric', 'subtrochanteric',
+      'hip arthroplasty', 'hip replacement', 'avascular necrosis', 'avn',
+    ],
+    knee: [
+      'knee', 'tibia', 'tibial', 'patella', 'patellar',
+      'total knee', 'tka', 'fibula', 'knee arthroplasty', 'knee replacement',
+      'unicompartmental', 'uka', 'distal femur', 'proximal tibia',
+    ],
+    alignment: [
+      'long leg', 'standing long', 'scanogram', 'mechanical axis',
+      'eos', 'full length', 'hip to ankle', 'leg length',
+    ],
   };
 
   // Returns true if the study base matches more than one region (e.g. "XR LUMBAR CERVICAL SPINE")
@@ -779,7 +809,7 @@
       if (e.key === 'ArrowLeft') prevImage();
       if (e.key === 'ArrowRight') nextImage();
       if ((e.key === 'c' || e.key === 'C') && allImages.length) toggleCompareMode();
-      if ((e.key === 's' || e.key === 'S') && snapshotPatientKey) toggleSnapshotMode();
+      if (!_isHipKnee && (e.key === 's' || e.key === 'S') && snapshotPatientKey) toggleSnapshotMode();
     }
   });
 
@@ -907,7 +937,19 @@
               <span class="patient-badge">${p.image_count} image${p.image_count !== 1 ? 's' : ''} · ${p.study_count} study</span>
             </div>
             <button class="patient-edit-btn" title="Edit patient name" onclick="event.stopPropagation(); startEditPatientName('${escAttr(p.key)}', '${escAttr(p.name)}')">${editSvg}</button>
-            <button class="patient-refresh-btn" title="Request refresh" onclick="event.stopPropagation(); requestPatientRefresh('${escAttr(p.key)}')">${refreshSvg}</button>
+            <div class="refresh-wrap">
+              <button class="patient-refresh-btn" title="Refresh images" onclick="event.stopPropagation(); toggleRefreshMenu('${escAttr(p.key)}')">${refreshSvg}</button>
+              <div class="refresh-menu" id="rm-${escAttr(p.key)}">
+                <button class="refresh-menu-item" onclick="event.stopPropagation(); doRefresh('${escAttr(p.key)}','full')">
+                  <span class="rm-label">Full refresh</span>
+                  <span class="rm-desc">All images, any date, all modalities</span>
+                </button>
+                <button class="refresh-menu-item" onclick="event.stopPropagation(); doRefresh('${escAttr(p.key)}','auto')">
+                  <span class="rm-label">Today's XR only</span>
+                  <span class="rm-desc">New X-rays from today (pre-clinic)</span>
+                </button>
+              </div>
+            </div>
           </div>
         </div>`;
       }
@@ -927,14 +969,39 @@
     document.querySelector(`.date-group[data-date="${CSS.escape(dk)}"]`)?.classList.toggle('collapsed', collapsedDates.has(dk));
   }
 
-  async function requestPatientRefresh(key) {
+  function toggleRefreshMenu(key) {
+    // Close any other open menus
+    document.querySelectorAll('.refresh-menu.open').forEach(m => {
+      if (m.id !== 'rm-' + key) m.classList.remove('open');
+    });
+    const menu = document.getElementById('rm-' + key);
+    if (menu) menu.classList.toggle('open');
+  }
+
+  // Close refresh menus when clicking elsewhere
+  document.addEventListener('click', () => {
+    document.querySelectorAll('.refresh-menu.open').forEach(m => m.classList.remove('open'));
+  });
+
+  async function doRefresh(key, type) {
+    // Close menu
+    document.querySelectorAll('.refresh-menu.open').forEach(m => m.classList.remove('open'));
+    await requestPatientRefresh(key, type);
+  }
+
+  async function requestPatientRefresh(key, type = 'auto') {
     pendingRefreshKeys.set(key, Date.now());
     const el = document.querySelector(`[data-key="${CSS.escape(key)}"]`);
     if (el) el.classList.add('refresh-pending');
+    const label = type === 'full' ? 'Full refresh' : "Today's XR refresh";
     try {
-      const resp = await fetch(`${API}/api/patients/${encodeURIComponent(key)}/request-refresh`, { method: 'POST' });
+      const resp = await fetch(`${API}/api/patients/${encodeURIComponent(key)}/request-refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type }),
+      });
       if (resp.ok) {
-        showToast('Refresh queued — extension will fetch when idle', 'info');
+        showToast(`${label} queued — extension will fetch when idle`, 'info');
       } else {
         showToast(`Refresh failed: server returned ${resp.status}`, 'error');
         pendingRefreshKeys.delete(key);
@@ -976,8 +1043,8 @@
         body: JSON.stringify({ name: newName }),
       });
       if (resp.ok) {
-        showToast(`Name updated — queuing refresh for "${newName}"`, 'info');
-        await requestPatientRefresh(key);
+        showToast(`Name updated — queuing full refresh for "${newName}"`, 'info');
+        await requestPatientRefresh(key, 'full');
       } else {
         showToast('Failed to update name', 'error');
       }
@@ -1070,21 +1137,26 @@
       document.getElementById('welcome').style.display   = 'none';
       document.getElementById('mainImage').style.display = 'block';
       document.getElementById('studyBar').style.display  = 'flex';
-      document.getElementById('castBar').style.display   = 'flex';
+      if (!_isHipKnee) document.getElementById('castBar').style.display = 'flex';
       document.getElementById('filterBar').style.display = 'flex';
       snapshotPatientKey = key;
       if (viewMode === 'compare') {
         exitCompareMode();
         document.getElementById('compareBtn').classList.remove('active');
       }
-      viewMode = 'single'; // reset so toggleSnapshotMode always enters snapshot
+      if (viewMode === 'snapshot') {
+        exitSnapshotMode();
+        document.getElementById('snapshotBtn').classList.remove('active');
+      }
+      viewMode = 'single'; // reset so toggle always enters the right mode
+      showSingleView();
 
       renderStudyBar();
       currentIndex = 0;
       applyRegionFilter();
       if (!_displayMode) {
-        if (_isHipKnee) toggleCompareMode();
-        else toggleSnapshotMode();
+        if (_isHipKnee && allStudies.length > 1) toggleCompareMode();
+        else if (!_isHipKnee) toggleSnapshotMode();
       }
 
       if (window.innerWidth <= 700) document.getElementById('sidebar').classList.remove('open');
@@ -2140,6 +2212,7 @@
   }
 
   function pushCastState(immediate = false) {
+    if (_isHipKnee) return;
     const state = buildCastState();
     if (!state || !castActiveRoom) return;
     clearTimeout(castDebounceTimer);
@@ -2248,9 +2321,9 @@
     return 'XR';
   }
 
-  function isSpineStudy(desc) {
+  function isRegionStudy(desc) {
     const base = (desc || '').split(' - ')[0].toLowerCase();
-    const allKws = [...(REGION_KW.lumbar || []), ...(REGION_KW.cervical || []), ...(REGION_KW.thoracic || [])];
+    const allKws = [...(REGION_KW.hip || []), ...(REGION_KW.knee || []), ...(REGION_KW.alignment || [])];
     return allKws.some(kw => base.includes(kw));
   }
 
@@ -2283,7 +2356,7 @@
         html += `<div class="report-no-studies">Error loading studies</div>`;
       } else {
         const studyList = Object.values(studies)
-          .filter(s => isSpineStudy(s.description || ''))
+          .filter(s => isRegionStudy(s.description || ''))
           .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
 
         if (studyList.length === 0) {
@@ -2344,47 +2417,37 @@
   setInterval(loadPatients, 5000);
   if (!_displayMode) loadRoomNames();
 
-
-  // ── Feedback modal ──
-  function openFeedbackModal() {
-    document.getElementById('feedbackText').value = '';
-    document.getElementById('feedbackStatus').textContent = '';
-    const ov = document.getElementById('feedbackOverlay');
-    ov.style.display = 'flex';
-    document.getElementById('feedbackText').focus();
-  }
-  function closeFeedbackModal() {
-    document.getElementById('feedbackOverlay').style.display = 'none';
-  }
-  async function submitFeedback() {
-    const msg = document.getElementById('feedbackText').value.trim();
-    if (!msg) return;
-    const statusEl = document.getElementById('feedbackStatus');
-    statusEl.textContent = 'Sending…';
-    statusEl.style.color = '#94a3b8';
+  // ── Sidebar download status bar ──
+  async function updateSidebarStatus() {
     try {
-      const currentPatient = document.querySelector('.patient-item.selected')?.dataset?.key || '';
-      const r = await fetch(`${API}/api/feedback`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: msg, patient: currentPatient, page: window.location.href }),
-      });
-      if (r.ok) {
-        statusEl.textContent = 'Sent — thank you!';
-        statusEl.style.color = '#34d399';
-        setTimeout(closeFeedbackModal, 1200);
+      const r = await fetch(`${API}/api/status`);
+      if (!r.ok) return;
+      const s = await r.json();
+      const el   = document.getElementById('sidebarStatus');
+      const text = document.getElementById('sidebarStatusText');
+      el.className = 'sidebar-status';
+      if (s.pulling) {
+        el.classList.add('ss-pulling');
+        text.textContent = s.today_complete > 0
+          ? `Downloading… ${s.today_complete} / ${s.today_total} done`
+          : 'Downloading…';
+      } else if (s.queued > 0) {
+        el.classList.add('ss-queued');
+        text.textContent = `${s.queued} patient${s.queued !== 1 ? 's' : ''} queued`;
+      } else if (s.today_total > 0 && s.today_complete === s.today_total) {
+        el.classList.add('ss-complete');
+        text.textContent = `All ${s.today_total} downloaded`;
+      } else if (s.today_total > 0) {
+        el.classList.add('ss-idle');
+        text.textContent = `${s.today_complete} / ${s.today_total} downloaded`;
       } else {
-        statusEl.textContent = 'Error sending. Try again.';
-        statusEl.style.color = '#f87171';
+        el.classList.add('ss-idle');
+        text.textContent = 'No patients today';
       }
-    } catch {
-      statusEl.textContent = 'Network error.';
-      statusEl.style.color = '#f87171';
-    }
+    } catch { /* server unreachable */ }
   }
-  document.getElementById('feedbackOverlay').addEventListener('click', e => {
-    if (e.target === document.getElementById('feedbackOverlay')) closeFeedbackModal();
-  });
+  updateSidebarStatus();
+  setInterval(updateSidebarStatus, 3000);
 </script>
 </body>
 </html>

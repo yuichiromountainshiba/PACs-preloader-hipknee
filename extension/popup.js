@@ -237,7 +237,9 @@ function getFilterOptions() {
         if (m === 'mr') return $('#filterMR')?.checked;
       });
 
-  return { regions: regions.length > 0 ? regions : null, modalities: modalities.length > 0 ? modalities : null };
+  // If no region checkboxes checked, default to ALL regions so non-matching studies are still filtered out
+  const effectiveRegions = regions.length > 0 ? regions : Object.keys(SUBSPECIALTY.regionKeywords);
+  return { regions: effectiveRegions.length > 0 ? effectiveRegions : null, modalities: modalities.length > 0 ? modalities : null };
 }
 
 function sendToTab(tabId, action, data) {
