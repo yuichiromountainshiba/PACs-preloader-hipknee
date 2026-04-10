@@ -1,19 +1,20 @@
 {
   "manifest_version": 3,
-  "name": "PACS Clinic Preloader — Hip & Knee",
+  "name": "PACS Clinic Preloader (DOM)",
   "version": "2.1.0",
-  "description": "Preload clinic X-rays for hip & knee arthroplasty — DOM-based UI automation",
+  "description": "Preload clinic X-rays — DOM-based UI automation (no GWT-RPC parsing)",
   "permissions": [
     "activeTab",
     "tabs",
     "scripting",
     "storage",
     "cookies",
-    "alarms"
+    "alarms",
+    "notifications"
   ],
   "host_permissions": [
     "https://pacs.renoortho.com/*",
-    "http://localhost:8889/*"
+    "http://localhost:8888/*"
   ],
   "action": {
     "default_popup": "popup.html",
