@@ -1,6 +1,5 @@
 // background.js — Service worker for PACS Preloader extension
 // Handles the preload loop so it survives the popup being closed.
-importScripts('config.js');
 
 let isPreloading = false;
 let pacsTabId = null;
@@ -29,7 +28,7 @@ async function flushDebugLog() {
   const batch = _debugQueue.splice(0);
   try {
     const saved = await chrome.storage.local.get(['serverUrl']);
-    const serverUrl = (saved.serverUrl || SUBSPECIALTY.defaultServerUrl).replace(/\/$/, '');
+    const serverUrl = (saved.serverUrl || 'http://localhost:8888').replace(/\/$/, '');
     await fetch(`${serverUrl}/api/debug-log`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -433,7 +432,7 @@ async function pollPendingRefreshes() {
     }
 
     const saved = await chrome.storage.local.get(['serverUrl', 'clinicDate']);
-    const serverUrl = (saved.serverUrl || SUBSPECIALTY.defaultServerUrl).replace(/\/$/, '');
+    const serverUrl = (saved.serverUrl || 'http://localhost:8888').replace(/\/$/, '');
     const clinicDate = saved.clinicDate || '';
     const baseFilters = await getFiltersFromStorage();
 
@@ -443,7 +442,10 @@ async function pollPendingRefreshes() {
     const pendingKeys = Object.keys(data.pending || {});
     if (pendingKeys.length === 0) return;
 
-    debugLog('refresh', 'info', 'refresh', `Found ${pendingKeys.length} pending refresh(es)`, { keys: pendingKeys });
+    debugLog('refresh', 'info', 'refresh', `Found ${pendingKeys.length} pending refresh(es)`, {
+      keys: pendingKeys,
+      types: Object.fromEntries(Object.entries(data.pending || {}).map(([k, v]) => [k, typeof v === 'object' ? v.type : 'legacy'])),
+    });
 
     // ── Check PACS login before attempting any refreshes ──
     let pacsLoggedIn = false;
@@ -588,7 +590,7 @@ async function getFiltersFromStorage() {
   const filters = saved.lastFilters || { modalities: ['xr', 'ct', 'mr'] };
   // Always enforce region filters — never allow null/empty
   if (!filters.regions || filters.regions.length === 0) {
-    filters.regions = Object.keys(SUBSPECIALTY.regionKeywords);
+    filters.regions = ['lumbar', 'cervical', 'thoracic'];
   }
   return filters;
 }
@@ -605,17 +607,30 @@ async function sendToContentScript(action, data) {
 }
 
 async function sendToContentScriptTab(tabId, action, data) {
+  debugLog('background', 'info', 'tab-message', `Sending "${action}" to tab ${tabId}`, {
+    tab_id: tabId,
+    action,
+    patient_name: data?.name || data?.patient?.name || undefined,
+  });
   try {
-    return await _sendTabMessage(tabId, action, data);
+    const result = await _sendTabMessage(tabId, action, data);
+    debugLog('background', 'pass', 'tab-message', `Tab ${tabId} responded to "${action}"`, {
+      tab_id: tabId,
+      action,
+      has_error: !!result?.error,
+      study_count: result?.studies?.length,
+    });
+    return result;
   } catch (e) {
     if (e.message.includes('Receiving end does not exist')) {
-      console.log('[Preload] content script missing — injecting into tab', tabId);
+      debugLog('background', 'warn', 'tab-message', `Content script missing in tab ${tabId} — re-injecting`, { tab_id: tabId });
       // Must inject config.js first so SUBSPECIALTY is defined when content.js loads
       await chrome.scripting.executeScript({ target: { tabId }, files: ['config.js'] }).catch(() => {});
       await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
       await sleep(400);
       return await _sendTabMessage(tabId, action, data);
     }
+    debugLog('background', 'error', 'tab-message', `Tab ${tabId} message failed: ${e.message}`, { tab_id: tabId, action });
     throw e;
   }
 }
@@ -669,7 +684,7 @@ async function pollPendingPreloads() {
 
   try {
     const saved = await chrome.storage.local.get(['serverUrl']);
-    const serverUrl = (saved.serverUrl || SUBSPECIALTY.defaultServerUrl).replace(/\/$/, '');
+    const serverUrl = (saved.serverUrl || 'http://localhost:8888').replace(/\/$/, '');
 
     const resp = await fetch(`${serverUrl}/api/pending_preloads`);
     if (!resp.ok) return;
@@ -711,7 +726,7 @@ const REFRESH_PASSES = [
 
 async function checkVisitTimes() {
   const saved = await chrome.storage.local.get(['serverUrl']);
-  const serverUrl = (saved.serverUrl || SUBSPECIALTY.defaultServerUrl).replace(/\/$/, '');
+  const serverUrl = (saved.serverUrl || 'http://localhost:8888').replace(/\/$/, '');
 
   let data;
   try {
